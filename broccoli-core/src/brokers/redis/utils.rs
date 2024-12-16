@@ -1,6 +1,8 @@
-use crate::{brokers::broker::BrokerConfig, error::BroccoliError};
+use serde_json::Value;
 
-use super::broker::{get_redis_connection, RedisBroker};
+use crate::brokers::broker::BrokerConfig;
+
+use super::broker::RedisBroker;
 
 impl RedisBroker {
     pub fn new() -> Self {
@@ -19,24 +21,19 @@ impl RedisBroker {
         }
     }
 
-    pub async fn remove_from_processing<T: for<'a> serde::Serialize>(
-        &self,
-        queue_name: &str,
-        message: T,
-    ) -> Result<(), BroccoliError> {
-        if let Some(redis_pool) = &self.redis_pool {
-            let mut redis_connection = get_redis_connection(redis_pool).await?;
-            let serialized_message = rmp_serde::to_vec(&message).map_err(|e| {
-                BroccoliError::PublishError(format!("Failed to serialize message: {:?}", e))
-            })?;
+    pub fn extract_message_attempts(message: &str) -> u8 {
+        let message: Value = serde_json::from_str(message).unwrap();
 
-            let _ = redis::cmd("LREM")
-                .arg(format!("{}_processing", queue_name))
-                .arg(1)
-                .arg(serialized_message)
-                .query_async::<String>(&mut *redis_connection)
-                .await;
-        }
-        Ok(())
+        message
+            .get("attempts")
+            .and_then(Value::as_u64)
+            .map(|attempts| attempts as u8)
+            .unwrap_or(0)
+    }
+
+    pub fn update_attempts(message: String, new_attempts: u8) -> String {
+        let mut message: Value = serde_json::from_str(&message).unwrap();
+        message["attempts"] = Value::from(new_attempts);
+        message.to_string()
     }
 }

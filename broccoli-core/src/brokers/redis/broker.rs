@@ -1,5 +1,5 @@
 use crate::{
-    brokers::broker::{Broker, BrokerConfig, BrokerMessage},
+    brokers::broker::{Broker, BrokerConfig},
     error::BroccoliError,
 };
 
@@ -25,7 +25,7 @@ pub(crate) async fn get_redis_connection(
         let borrowed_redis_connection = match redis_pool.get().await {
             Ok(redis_connection) => Some(redis_connection),
             Err(err) => {
-                BroccoliError::BrokerError(format!("Failed to get redis connection: {:?}", err));
+                BroccoliError::Broker(format!("Failed to get redis connection: {:?}", err));
                 None
             }
         };
@@ -45,10 +45,11 @@ pub(crate) async fn get_redis_connection(
     Ok(redis_connection)
 }
 
+#[async_trait::async_trait]
 impl Broker for RedisBroker {
     async fn connect(&mut self, broker_url: &str) -> Result<(), BroccoliError> {
         let redis_manager = bb8_redis::RedisConnectionManager::new(broker_url).map_err(|e| {
-            BroccoliError::BrokerError(format!("Failed to create redis manager: {:?}", e))
+            BroccoliError::Broker(format!("Failed to create redis manager: {:?}", e))
         })?;
 
         let redis_pool = bb8_redis::bb8::Pool::builder()
@@ -68,86 +69,56 @@ impl Broker for RedisBroker {
         self.connected = true;
         Ok(())
     }
-
-    async fn publish<T: Clone + serde::Serialize>(
-        &self,
-        queue_name: &str,
-        message: T,
-    ) -> Result<(), BroccoliError> {
+    async fn publish(&self, queue_name: &str, message: String) -> Result<(), BroccoliError> {
         if let Some(redis_pool) = &self.redis_pool {
             let mut redis_connection = get_redis_connection(redis_pool).await?;
 
-            let payload = BrokerMessage::new(message);
-
-            let serialized_message = rmp_serde::to_vec(&payload).map_err(|e| {
-                BroccoliError::PublishError(format!("Failed to serialize message: {:?}", e))
-            })?;
-
             let _ = redis::cmd("LPUSH")
                 .arg(queue_name)
-                .arg(serialized_message)
+                .arg(&message.to_string())
                 .query_async::<String>(&mut *redis_connection)
                 .await
                 .map_err(|e| {
-                    BroccoliError::PublishError(format!("Failed to publish message: {:?}", e))
+                    BroccoliError::Publish(format!("Failed to publish message: {:?}", e))
                 })?;
         } else {
-            return Err(BroccoliError::BrokerError(
+            return Err(BroccoliError::Broker(
                 "Redis pool is not initialized".to_string(),
             ));
         }
         Ok(())
     }
 
-    async fn try_consume<T: Clone + serde::Serialize + serde::de::DeserializeOwned>(
-        &self,
-        queue_name: &str,
-    ) -> Result<Option<BrokerMessage<T>>, BroccoliError> {
+    async fn try_consume(&self, queue_name: &str) -> Result<Option<String>, BroccoliError> {
         if let Some(redis_pool) = &self.redis_pool {
             let mut redis_connection = get_redis_connection(redis_pool).await?;
 
-            let payload: Vec<u8> = redis::cmd("brpoplpush")
+            let payload: String = redis::cmd("brpoplpush")
                 .arg(queue_name)
                 .arg(format!("{}_processing", queue_name))
                 .arg(1)
                 .query_async(&mut *redis_connection)
                 .await
                 .map_err(|e| {
-                    BroccoliError::ConsumeError(format!("Failed to consume message: {:?}", e))
+                    BroccoliError::Consume(format!("Failed to consume message: {:?}", e))
                 })?;
 
-            let serialized_message = {
-                if payload.is_empty() {
-                    return Ok(None);
-                }
-
-                payload
-            };
-
-            let worker_message: BrokerMessage<T> = rmp_serde::from_read(&serialized_message[..])
-                .map_err(|e| {
-                    BroccoliError::ConsumeError(format!("Failed to parse message: {:?}", e))
-                })?;
-
-            Ok(Some(worker_message))
+            Ok(Some(payload))
         } else {
-            Err(BroccoliError::BrokerError(
+            Err(BroccoliError::Broker(
                 "Redis pool is not initialized".to_string(),
             ))
         }
     }
 
-    async fn consume<T: Clone + serde::Serialize + serde::de::DeserializeOwned>(
-        &self,
-        queue_name: &str,
-    ) -> Result<BrokerMessage<T>, BroccoliError> {
+    async fn consume(&self, queue_name: &str) -> Result<String, BroccoliError> {
         if let Some(redis_pool) = &self.redis_pool {
             let mut redis_connection = get_redis_connection(redis_pool).await?;
             let mut broken_pipe_sleep = std::time::Duration::from_secs(10);
-            let mut message: Option<BrokerMessage<T>> = None;
+            let mut message: Option<String> = None;
 
             while message.is_none() {
-                let payload_result: Result<Vec<Vec<u8>>, redis::RedisError> =
+                let payload_result: Result<Vec<String>, redis::RedisError> =
                     redis::cmd("brpoplpush")
                         .arg(queue_name)
                         .arg(format!("{}_processing", queue_name))
@@ -159,15 +130,13 @@ impl Broker for RedisBroker {
                     broken_pipe_sleep = std::time::Duration::from_secs(10);
 
                     if payload.is_empty() {
-                        return Err(BroccoliError::ConsumeError(
-                            "Failed to consume message".to_string(),
-                        ));
+                        continue;
                     }
 
                     if let Some(first_element) = payload.first() {
                         first_element.clone()
                     } else {
-                        return Err(BroccoliError::ConsumeError(
+                        return Err(BroccoliError::Consume(
                             "Failed to consume message: Payload is empty".to_string(),
                         ));
                     }
@@ -183,44 +152,48 @@ impl Broker for RedisBroker {
                     continue;
                 };
 
-                message = rmp_serde::from_read(&serialized_message[..]).map_err(|e| {
-                    BroccoliError::ConsumeError(format!("Failed to parse message: {:?}", e))
-                })?;
+                message = Some(serialized_message);
             }
 
             Ok(message.expect("Should have a message to exit loop"))
         } else {
-            Err(BroccoliError::BrokerError(
+            Err(BroccoliError::Broker(
                 "Redis pool is not initialized".to_string(),
             ))
         }
     }
 
-    async fn retry<T: Clone + serde::Serialize>(
-        &self,
-        queue_name: &str,
-        message: &mut BrokerMessage<T>,
-    ) -> Result<(), BroccoliError> {
+    async fn acknowledge(&self, queue_name: &str, message: String) -> Result<(), BroccoliError> {
         if let Some(redis_pool) = &self.redis_pool {
             let mut redis_connection = get_redis_connection(redis_pool).await?;
-
-            let serialized_message = rmp_serde::to_vec(&message).map_err(|e| {
-                BroccoliError::PublishError(format!("Failed to serialize message: {:?}", e))
-            })?;
-
-            message.attempts += 1;
 
             let _ = redis::cmd("LREM")
                 .arg(format!("{}_processing", queue_name))
                 .arg(1)
-                .arg(serialized_message.clone())
+                .arg(message)
+                .query_async::<String>(&mut *redis_connection)
+                .await;
+        }
+        Ok(())
+    }
+
+    async fn reject(&self, queue_name: &str, message: String) -> Result<(), BroccoliError> {
+        if let Some(redis_pool) = &self.redis_pool {
+            let mut redis_connection = get_redis_connection(redis_pool).await?;
+
+            let attempts = RedisBroker::extract_message_attempts(&message) + 1;
+
+            let _ = redis::cmd("LREM")
+                .arg(format!("{}_processing", queue_name))
+                .arg(1)
+                .arg(message.clone())
                 .query_async::<String>(&mut *redis_connection)
                 .await
                 .map_err(|e| {
-                    BroccoliError::PublishError(format!("Failed to publish message: {:?}", e))
+                    BroccoliError::Publish(format!("Failed to publish message: {:?}", e))
                 })?;
 
-            if !message.attempts
+            if !attempts
                 < self
                     .config
                     .as_ref()
@@ -229,35 +202,28 @@ impl Broker for RedisBroker {
             {
                 redis::cmd("lpush")
                     .arg(format!("{}_failed", queue_name))
-                    .arg(serialized_message)
+                    .arg(message)
                     .query_async::<String>(&mut *redis_connection)
                     .await
                     .map_err(|err| {
-                        BroccoliError::PublishError(format!(
-                            "Failed to push to failed queue: {:?}",
-                            err
-                        ))
+                        BroccoliError::Publish(format!("Failed to push to failed queue: {:?}", err))
                     })?;
 
-                return Err(BroccoliError::BrokerError(
-                    "Message failed 3 times".to_string(),
-                ));
+                return Err(BroccoliError::Broker("Message failed 3 times".to_string()));
             }
 
-            let new_payload_message = rmp_serde::to_vec(&message).map_err(|e| {
-                BroccoliError::PublishError(format!("Failed to serialize message: {:?}", e))
-            })?;
+            let new_message = RedisBroker::update_attempts(message, attempts);
 
             let _ = redis::cmd("LPUSH")
                 .arg(queue_name)
-                .arg(new_payload_message)
+                .arg(new_message)
                 .query_async::<String>(&mut *redis_connection)
                 .await
                 .map_err(|e| {
-                    BroccoliError::PublishError(format!("Failed to publish message: {:?}", e))
+                    BroccoliError::Publish(format!("Failed to publish message: {:?}", e))
                 })?;
         } else {
-            return Err(BroccoliError::BrokerError(
+            return Err(BroccoliError::Broker(
                 "Redis pool is not initialized".to_string(),
             ));
         }

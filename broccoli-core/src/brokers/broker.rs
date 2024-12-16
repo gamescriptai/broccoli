@@ -1,28 +1,13 @@
 use crate::error::BroccoliError;
 
-use super::redis::broker::RedisBroker;
-
 #[async_trait::async_trait]
-pub trait Broker {
+pub trait Broker: Send + Sync {
     async fn connect(&mut self, broker_url: &str) -> Result<(), BroccoliError>;
-    async fn publish<T: Clone + serde::Serialize>(
-        &self,
-        queue_name: &str,
-        message: T,
-    ) -> Result<(), BroccoliError>;
-    async fn try_consume<T: Clone + serde::Serialize + serde::de::DeserializeOwned>(
-        &self,
-        queue_name: &str,
-    ) -> Result<Option<BrokerMessage<T>>, BroccoliError>;
-    async fn consume<T: Clone + serde::Serialize + serde::de::DeserializeOwned>(
-        &self,
-        queue_name: &str,
-    ) -> Result<BrokerMessage<T>, BroccoliError>;
-    async fn retry<T: Clone + serde::Serialize>(
-        &self,
-        queue_name: &str,
-        message: &mut BrokerMessage<T>,
-    ) -> Result<(), BroccoliError>;
+    async fn publish(&self, queue_name: &str, message: String) -> Result<(), BroccoliError>;
+    async fn try_consume(&self, queue_name: &str) -> Result<Option<String>, BroccoliError>;
+    async fn consume(&self, queue_name: &str) -> Result<String, BroccoliError>;
+    async fn acknowledge(&self, queue_name: &str, message: String) -> Result<(), BroccoliError>;
+    async fn reject(&self, queue_name: &str, message: String) -> Result<(), BroccoliError>;
 }
 
 pub struct BrokerConfig {
@@ -41,9 +26,8 @@ impl Default for BrokerConfig {
     }
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BrokerMessage<T: Clone + serde::Serialize> {
-    pub task_id: uuid::Uuid,
     pub payload: T,
     pub attempts: u8,
 }
@@ -51,10 +35,13 @@ pub struct BrokerMessage<T: Clone + serde::Serialize> {
 impl<T: Clone + serde::Serialize> BrokerMessage<T> {
     pub fn new(payload: T) -> Self {
         BrokerMessage {
-            task_id: uuid::Uuid::new_v4(),
             payload,
             attempts: 0,
         }
+    }
+
+    pub fn new_with_attempts(payload: T, attempts: u8) -> Self {
+        BrokerMessage { payload, attempts }
     }
 }
 

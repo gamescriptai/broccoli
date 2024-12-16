@@ -3,16 +3,20 @@ name = "broccoli-core"
 version = "0.1.0"
 edition = "2021"
 
-[lib]
-crate-type = ["lib"]
-
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 bb8-redis = "0.18.0"
 redis = { version = "0.27.5", features = ["tokio-rustls-comp", "aio"] }
 serde = { version = "1.0.216", features = ["derive"] }
-rmp-serde = "1.1"
+serde_json = "1.0.133"
 tokio = "1.42.0"
 uuid = { version = "1", features = ["v4", "serde"] }
 async-trait = "0.1.83"
+thiserror = "2.0.7"
+futures = "0.3.31"
+sha256 = "1.5.0"
+
+[dev-dependencies]
+tokio = { version = "1.42.0", features = ["full"] }
+chrono = { version = "0.4.39", features = ["serde"] }
