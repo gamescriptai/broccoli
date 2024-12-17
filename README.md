@@ -70,7 +70,7 @@ This multi-broker approach will allow you to choose the message broker that best
 
 ## Documentation
 
-- [API Documentation](https://docs.rs/broccoli)
+- [API Documentation](https://docs.rs/broccoli_queue)
 
 ## Roadmap
 
