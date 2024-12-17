@@ -1,4 +1,4 @@
-use broccoli::{error::BroccoliError, queue::BroccoliQueue};
+use broccoli_queue::{error::BroccoliError, queue::BroccoliQueue};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

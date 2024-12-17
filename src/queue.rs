@@ -347,8 +347,8 @@ impl BroccoliQueue {
     /// # Example
     ///
     /// ```rust
-    /// use broccoli::queue::BroccoliQueue;
-    /// use broccoli::brokers::broker::BrokerMessage;
+    /// use broccoli_queue::queue::BroccoliQueue;
+    /// use broccoli_queue::brokers::broker::BrokerMessage;
     ///
     /// #[derive(Debug, Clone, Serialize, Deserialize)]
     /// struct JobPayload {
@@ -493,9 +493,9 @@ impl BroccoliQueue {
     /// # Example
     ///
     /// ```rust
-    /// use broccoli::queue::BroccoliQueue;
-    /// use broccoli::brokers::broker::BrokerMessage;
-    /// use broccoli::error::BroccoliError;
+    /// use broccoli_queue::queue::BroccoliQueue;
+    /// use broccoli_queue::brokers::broker::BrokerMessage;
+    /// use broccoli_queue::error::BroccoliError;
     ///
     /// #[derive(Debug, Clone, Serialize, Deserialize)]
     /// struct JobPayload {

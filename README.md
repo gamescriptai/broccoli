@@ -1,7 +1,7 @@
 # Broccoli
-[![Crates.io](https://img.shields.io/crates/v/broccoli)](https://crates.io/crates/broccoli)
-[![Docs.rs](https://docs.rs/broccoli/badge.svg)](https://docs.rs/broccoli)
-[![License](https://img.shields.io/crates/l/broccoli)](https://github.com/densumesh/broccoli/blob/main/LICENSE)
+[![Crates.io](https://img.shields.io/crates/v/broccoli_queue)](https://crates.io/crates/broccoli_queue)
+[![Docs.rs](https://docs.rs/broccoli_queue/badge.svg)](https://docs.rs/broccoli_queue)
+[![License](https://img.shields.io/crates/l/broccoli_queue)](https://github.com/densumesh/broccoli/blob/main/LICENSE)
 
 A robust message queue system for Rust applications, designed as a Rust alternative to [Celery](https://docs.celeryq.dev/en/stable/getting-started/introduction.html). Currently Redis-backed, with planned support for RabbitMQ, Kafka, and other message brokers.
 
@@ -20,13 +20,13 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-broccoli = "0.1.0"
+broccoli_queue = "0.1.0"
 ```
 
 ## Quick Start
 
 ```rust
-use broccoli::{queue::BroccoliQueue, brokers::broker::BrokerMessage};
+use broccoli_queue::{queue::BroccoliQueue, brokers::broker::BrokerMessage};
 use serde::{Serialize, Deserialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,4 +1,4 @@
-use broccoli::{brokers::broker::BrokerMessage, error::BroccoliError, queue::BroccoliQueue};
+use broccoli_queue::{brokers::broker::BrokerMessage, error::BroccoliError, queue::BroccoliQueue};
 use serde::{Deserialize, Serialize};
 use std::{error::Error, time::Duration};
 
