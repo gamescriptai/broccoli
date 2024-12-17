@@ -3,7 +3,7 @@
 [![Docs.rs](https://docs.rs/broccoli_queue/badge.svg)](https://docs.rs/broccoli_queue)
 [![License](https://img.shields.io/crates/l/broccoli_queue)](https://github.com/densumesh/broccoli/blob/main/LICENSE)
 
-A robust message queue system for Rust applications, designed as a Rust alternative to [Celery](https://docs.celeryq.dev/en/stable/getting-started/introduction.html). Currently Redis-backed, with planned support for RabbitMQ, Kafka, and other message brokers.
+A robust message queue system for Rust applications, designed as a Rust alternative to [Celery](https://docs.celeryq.dev/en/stable/getting-started/introduction.html). Currently Redis-backed, with planned support for RabbitMQ, Kafka, and other message brokers. This is by no means a finished product, but we're actively working on it and would love your feedback and contributions!
 
 ## Features
 - Asynchronous message processing
