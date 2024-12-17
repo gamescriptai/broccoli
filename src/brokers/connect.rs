@@ -1,11 +1,10 @@
-use crate::error::BroccoliError;
-
 use super::{
     broker::{Broker, BrokerConfig},
     redis::broker::RedisBroker,
 };
+use crate::error::BroccoliError;
 
-pub async fn connect_to_broker(
+pub(crate) async fn connect_to_broker(
     broker_url: &str,
     config: Option<BrokerConfig>,
 ) -> Result<Box<dyn Broker>, BroccoliError> {

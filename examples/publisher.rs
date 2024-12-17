@@ -1,4 +1,4 @@
-use broccoli_core::{error::BroccoliError, queue::BroccoliQueue};
+use broccoli::{error::BroccoliError, queue::BroccoliQueue};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,7 +19,7 @@ struct Parameters {
 #[tokio::main]
 async fn main() -> Result<(), BroccoliError> {
     let queue = BroccoliQueue::builder("redis://localhost:6379")
-        .retry_attempts(3)
+        .failed_message_retry_strategy(Default::default())
         .pool_connections(5)
         .build()
         .await?;
