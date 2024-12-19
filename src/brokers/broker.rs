@@ -20,7 +20,11 @@ pub trait Broker: Send + Sync {
     ///
     /// # Returns
     /// A `Result` indicating success or failure.
-    async fn publish(&self, queue_name: &str, message: &[String]) -> Result<(), BroccoliError>;
+    async fn publish(
+        &self,
+        queue_name: &str,
+        message: &[InternalBrokerMessage],
+    ) -> Result<Vec<InternalBrokerMessage>, BroccoliError>;
 
     /// Attempts to consume a message from the specified queue.
     ///
@@ -30,7 +34,10 @@ pub trait Broker: Send + Sync {
     /// # Returns
     /// A `Result` containing an `Some(String)` with the message if available or `None`
     /// if no message is avaiable, and a `BroccoliError` on failure.
-    async fn try_consume(&self, queue_name: &str) -> Result<Option<String>, BroccoliError>;
+    async fn try_consume(
+        &self,
+        queue_name: &str,
+    ) -> Result<Option<InternalBrokerMessage>, BroccoliError>;
 
     /// Consumes a message from the specified queue, blocking until a message is available.
     ///
@@ -39,7 +46,7 @@ pub trait Broker: Send + Sync {
     ///
     /// # Returns
     /// A `Result` containing the message as a `String`, or a `BroccoliError` on failure.
-    async fn consume(&self, queue_name: &str) -> Result<String, BroccoliError>;
+    async fn consume(&self, queue_name: &str) -> Result<InternalBrokerMessage, BroccoliError>;
 
     /// Acknowledges the processing of a message, removing it from the processing queue.
     ///
@@ -49,7 +56,11 @@ pub trait Broker: Send + Sync {
     ///
     /// # Returns
     /// A `Result` indicating success or failure.
-    async fn acknowledge(&self, queue_name: &str, message: String) -> Result<(), BroccoliError>;
+    async fn acknowledge(
+        &self,
+        queue_name: &str,
+        message: InternalBrokerMessage,
+    ) -> Result<(), BroccoliError>;
 
     /// Rejects a message, re-queuing it or moving it to a failed queue if the retry limit is reached.
     ///
@@ -59,7 +70,21 @@ pub trait Broker: Send + Sync {
     ///
     /// # Returns
     /// A `Result` indicating success or failure.
-    async fn reject(&self, queue_name: &str, message: String) -> Result<(), BroccoliError>;
+    async fn reject(
+        &self,
+        queue_name: &str,
+        message: InternalBrokerMessage,
+    ) -> Result<(), BroccoliError>;
+
+    /// Cancels a message, removing it from the processing queue.
+    ///
+    /// # Arguments
+    /// * `queue_name` - The name of the queue.
+    /// * `message_id` - The ID of the message to be canceled.
+    ///
+    /// # Returns
+    /// A `Result` indicating success or failure.
+    async fn cancel(&self, queue_name: &str, message_id: String) -> Result<(), BroccoliError>;
 }
 
 /// Configuration options for broker behavior.
@@ -112,6 +137,72 @@ impl<T: Clone + serde::Serialize> BrokerMessage<T> {
             task_id: uuid::Uuid::new_v4(),
             payload,
             attempts,
+        }
+    }
+}
+
+/// A message with metadata for internal broker operations.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct InternalBrokerMessage {
+    /// Unique identifier for the message
+    pub task_id: String,
+    /// The actual message content stringified
+    pub payload: String,
+    /// Number of processing attempts made
+    pub attempts: u8,
+}
+
+impl InternalBrokerMessage {
+    /// Creates a new `InternalBrokerMessage` with the provided metadata.
+    pub fn new(task_id: String, payload: String, attempts: u8) -> Self {
+        InternalBrokerMessage {
+            task_id,
+            payload,
+            attempts,
+        }
+    }
+}
+
+impl<T: Clone + serde::Serialize> From<BrokerMessage<T>> for InternalBrokerMessage {
+    fn from(msg: BrokerMessage<T>) -> Self {
+        InternalBrokerMessage {
+            task_id: msg.task_id.to_string(),
+            payload: serde_json::to_string(&msg.payload).unwrap(),
+            attempts: msg.attempts,
+        }
+    }
+}
+
+impl<T: Clone + serde::Serialize> From<&BrokerMessage<T>> for InternalBrokerMessage {
+    fn from(msg: &BrokerMessage<T>) -> Self {
+        InternalBrokerMessage {
+            task_id: msg.task_id.to_string(),
+            payload: serde_json::to_string(&msg.payload).unwrap(),
+            attempts: msg.attempts,
+        }
+    }
+}
+
+impl<T: Clone + serde::de::DeserializeOwned + serde::Serialize> From<InternalBrokerMessage>
+    for BrokerMessage<T>
+{
+    fn from(msg: InternalBrokerMessage) -> Self {
+        BrokerMessage {
+            task_id: msg.task_id.parse().unwrap(),
+            payload: serde_json::from_str(&msg.payload).unwrap(),
+            attempts: msg.attempts,
+        }
+    }
+}
+
+impl<T: Clone + serde::de::DeserializeOwned + serde::Serialize> From<&InternalBrokerMessage>
+    for BrokerMessage<T>
+{
+    fn from(msg: &InternalBrokerMessage) -> Self {
+        BrokerMessage {
+            task_id: msg.task_id.parse().unwrap(),
+            payload: serde_json::from_str(&msg.payload).unwrap(),
+            attempts: msg.attempts,
         }
     }
 }

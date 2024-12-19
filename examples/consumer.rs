@@ -1,4 +1,4 @@
-use broccoli_queue::{brokers::broker::BrokerMessage, error::BroccoliError, queue::BroccoliQueue};
+use broccoli_queue::{error::BroccoliError, queue::BroccoliQueue};
 use serde::{Deserialize, Serialize};
 use std::{error::Error, time::Duration};
 
@@ -23,7 +23,7 @@ async fn process_job(job: JobPayload) -> Result<(), BroccoliError> {
     // Simulate some work
     tokio::time::sleep(Duration::from_secs(1)).await;
 
-    Ok(())
+    Err(BroccoliError::Job("Failed to process job".to_string()))
 }
 
 async fn success_handler(msg: JobPayload) -> Result<(), BroccoliError> {
@@ -51,10 +51,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .process_messages(
             "jobs",
             None,
-            |message: BrokerMessage<JobPayload>| async move {
-                println!("Received message: {:?}", message);
-                Ok(())
-            },
+            |msg| async move { process_job(msg.payload).await },
         )
         .await
         .unwrap();
@@ -62,7 +59,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     queue
         .process_messages_with_handlers(
             "jobs",
-            5,
+            Some(5),
             |msg| async move { process_job(msg.payload).await },
             |msg| async { success_handler(msg.payload).await },
             |msg, err| async { error_handler(msg.payload, err).await },

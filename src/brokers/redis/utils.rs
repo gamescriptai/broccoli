@@ -3,9 +3,12 @@
 //! This module provides helper methods for managing Redis message operations,
 //! including message parsing and manipulation of message metadata.
 
-use super::broker::RedisBroker;
-use crate::brokers::broker::BrokerConfig;
-use serde_json::Value;
+use super::broker::{RedisBroker, RedisPool};
+use crate::{
+    brokers::broker::{BrokerConfig, InternalBrokerMessage},
+    error::BroccoliError,
+};
+use redis::FromRedisValue;
 
 impl RedisBroker {
     /// Creates a new `RedisBroker` instance with default configuration.
@@ -29,29 +32,36 @@ impl RedisBroker {
         }
     }
 
-    pub(crate) fn extract_message_attempts(message: &str) -> u8 {
-        let message: Value = serde_json::from_str(message).unwrap();
-
-        message
-            .get("attempts")
-            .and_then(Value::as_u64)
-            .map(|attempts| attempts as u8)
-            .unwrap_or(0)
+    pub(crate) fn ensure_pool(&self) -> Result<RedisPool, BroccoliError> {
+        match &self.redis_pool {
+            Some(pool) => Ok(pool.clone()),
+            None => Err(BroccoliError::Broker(
+                "Redis pool not initialized".to_string(),
+            )),
+        }
     }
+}
 
-    pub(crate) fn extract_task_id(message: &str) -> String {
-        let message: Value = serde_json::from_str(message).unwrap();
+impl FromRedisValue for InternalBrokerMessage {
+    fn from_redis_value(v: &redis::Value) -> redis::RedisResult<Self> {
+        let map: std::collections::HashMap<String, String> = redis::from_redis_value(v)?;
 
-        message
-            .get("task_id")
-            .and_then(Value::as_str)
-            .map(String::from)
-            .unwrap_or_else(|| String::from(""))
-    }
+        let task_id = map.get("task_id").ok_or_else(|| {
+            redis::RedisError::from((redis::ErrorKind::TypeError, "Missing field: task_id"))
+        })?;
 
-    pub(crate) fn update_attempts(message: String, new_attempts: u8) -> String {
-        let mut message: Value = serde_json::from_str(&message).unwrap();
-        message["attempts"] = Value::from(new_attempts);
-        message.to_string()
+        let payload = map.get("payload").ok_or_else(|| {
+            redis::RedisError::from((redis::ErrorKind::TypeError, "Missing field: payload"))
+        })?;
+
+        let attempts = map.get("attempts").ok_or_else(|| {
+            redis::RedisError::from((redis::ErrorKind::TypeError, "Missing field: attempts"))
+        })?;
+
+        Ok(InternalBrokerMessage {
+            task_id: task_id.to_string(),
+            payload: payload.to_string(),
+            attempts: attempts.parse().unwrap(),
+        })
     }
 }

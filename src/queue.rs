@@ -8,7 +8,7 @@ use futures::stream::FuturesUnordered;
 
 use crate::{
     brokers::{
-        broker::{Broker, BrokerConfig, BrokerMessage},
+        broker::{Broker, BrokerConfig, BrokerMessage, InternalBrokerMessage},
         connect::connect_to_broker,
     },
     error::BroccoliError,
@@ -192,17 +192,18 @@ impl BroccoliQueue {
         &self,
         topic: &str,
         message: &T,
-    ) -> Result<(), BroccoliError> {
+    ) -> Result<BrokerMessage<T>, BroccoliError> {
         let message = BrokerMessage::new(message.clone());
-        let serialized_message = serde_json::to_string(&message)
-            .map_err(|e| BroccoliError::Publish(format!("Failed to serialize message: {:?}", e)))?;
 
-        self.broker
-            .publish(topic, &[serialized_message])
+        let message = self
+            .broker
+            .publish(topic, &[message.into()])
             .await
-            .map_err(|e| BroccoliError::Publish(format!("Failed to publish message: {:?}", e)))?;
+            .map_err(|e| BroccoliError::Publish(format!("Failed to publish message: {:?}", e)))?
+            .pop()
+            .unwrap();
 
-        Ok(())
+        Ok(message.into())
     }
 
     /// Publishes a batch of messages to the specified topic.
@@ -217,24 +218,22 @@ impl BroccoliQueue {
         &self,
         topic: &str,
         messages: impl IntoIterator<Item = T>,
-    ) -> Result<(), BroccoliError> {
+    ) -> Result<Vec<BrokerMessage<T>>, BroccoliError> {
         let messages: Vec<BrokerMessage<T>> =
             messages.into_iter().map(BrokerMessage::new).collect();
 
-        let serialized_messages = messages
+        let internal_messages = messages
             .iter()
-            .map(serde_json::to_string)
-            .collect::<Result<Vec<String>, _>>()
-            .map_err(|e| {
-                BroccoliError::Publish(format!("Failed to serialize messages: {:?}", e))
-            })?;
+            .map(Into::into)
+            .collect::<Vec<InternalBrokerMessage>>();
 
-        self.broker
-            .publish(topic, &serialized_messages)
+        let messages = self
+            .broker
+            .publish(topic, &internal_messages)
             .await
             .map_err(|e| BroccoliError::Publish(format!("Failed to publish messages: {:?}", e)))?;
 
-        Ok(())
+        Ok(messages.into_iter().map(Into::into).collect())
     }
 
     /// Consumes a message from the specified topic.
@@ -248,16 +247,12 @@ impl BroccoliQueue {
         &self,
         topic: &str,
     ) -> Result<BrokerMessage<T>, BroccoliError> {
-        let serialized_message =
+        let message =
             self.broker.consume(topic).await.map_err(|e| {
                 BroccoliError::Consume(format!("Failed to consume message: {:?}", e))
             })?;
 
-        let message: BrokerMessage<T> = serde_json::from_str(&serialized_message).map_err(|e| {
-            BroccoliError::Consume(format!("Failed to deserialize message: {:?}", e))
-        })?;
-
-        Ok(message)
+        Ok(message.into())
     }
 
     /// Consumes a batch of messages from the specified topic.
@@ -303,13 +298,8 @@ impl BroccoliQueue {
                 BroccoliError::Consume(format!("Failed to consume message: {:?}", e))
             })?;
 
-        if let Some(serialized_message) = serialized_message {
-            let message: BrokerMessage<T> =
-                serde_json::from_str(&serialized_message).map_err(|e| {
-                    BroccoliError::Consume(format!("Failed to deserialize message: {:?}", e))
-                })?;
-
-            Ok(Some(message))
+        if let Some(message) = serialized_message {
+            Ok(Some(message.into()))
         } else {
             Ok(None)
         }
@@ -328,12 +318,8 @@ impl BroccoliQueue {
         topic: &str,
         message: BrokerMessage<T>,
     ) -> Result<(), BroccoliError> {
-        let serialized_message = serde_json::to_string(&message).map_err(|e| {
-            BroccoliError::Acknowledge(format!("Failed to serialize message: {:?}", e))
-        })?;
-
         self.broker
-            .acknowledge(topic, serialized_message)
+            .acknowledge(topic, message.into())
             .await
             .map_err(|e| {
                 BroccoliError::Acknowledge(format!("Failed to acknowledge message: {:?}", e))
@@ -404,7 +390,7 @@ impl BroccoliQueue {
 
                     let handle = tokio::spawn(async move {
                         loop {
-                            let serialized_message = broker
+                            let message = broker
                                 .consume(&topic)
                                 .await
                                 .map_err(|e| {
@@ -412,31 +398,19 @@ impl BroccoliQueue {
                                 })
                                 .unwrap();
 
-                            let message: BrokerMessage<T> =
-                                serde_json::from_str(&serialized_message)
-                                    .map_err(|e| {
-                                        log::error!("Failed to deserialize message: {:?}", e);
-                                    })
-                                    .unwrap();
-
-                            match handler(message).await {
+                            match handler((&message).into()).await {
                                 Ok(_) => {
                                     // Message processed successfully
-                                    let _ = broker
-                                        .acknowledge(&topic, serialized_message)
-                                        .await
-                                        .map_err(|e| {
+                                    let _ =
+                                        broker.acknowledge(&topic, message).await.map_err(|e| {
                                             log::error!("Failed to acknowledge message: {:?}", e);
                                         });
                                 }
                                 Err(_) => {
                                     // Message processing failed
-                                    let _ = broker
-                                        .reject(&topic, serialized_message)
-                                        .await
-                                        .map_err(|e| {
-                                            log::error!("Failed to reject message: {:?}", e);
-                                        });
+                                    let _ = broker.reject(&topic, message).await.map_err(|e| {
+                                        log::error!("Failed to reject message: {:?}", e);
+                                    });
                                 }
                             }
                         }
@@ -445,43 +419,27 @@ impl BroccoliQueue {
                     handles.push(handle);
                 }
             } else {
-                loop {
-                    let serialized_message = self
-                        .broker
-                        .consume(topic)
-                        .await
-                        .map_err(|e| {
-                            log::error!("Failed to consume message: {:?}", e);
-                        })
-                        .unwrap();
+                let message = self
+                    .broker
+                    .consume(topic)
+                    .await
+                    .map_err(|e| {
+                        log::error!("Failed to consume message: {:?}", e);
+                    })
+                    .unwrap();
 
-                    let message: BrokerMessage<T> = serde_json::from_str(&serialized_message)
-                        .map_err(|e| {
-                            log::error!("Failed to deserialize message: {:?}", e);
-                        })
-                        .unwrap();
-
-                    match handler(message).await {
-                        Ok(_) => {
-                            // Message processed successfully
-                            let _ = self
-                                .broker
-                                .acknowledge(topic, serialized_message)
-                                .await
-                                .map_err(|e| {
-                                    log::error!("Failed to acknowledge message: {:?}", e);
-                                });
-                        }
-                        Err(_) => {
-                            // Message processing failed
-                            let _ =
-                                self.broker
-                                    .reject(topic, serialized_message)
-                                    .await
-                                    .map_err(|e| {
-                                        log::error!("Failed to reject message: {:?}", e);
-                                    });
-                        }
+                match handler((&message).into()).await {
+                    Ok(_) => {
+                        // Message processed successfully
+                        let _ = self.broker.acknowledge(topic, message).await.map_err(|e| {
+                            log::error!("Failed to acknowledge message: {:?}", e);
+                        });
+                    }
+                    Err(_) => {
+                        // Message processing failed
+                        let _ = self.broker.reject(topic, message).await.map_err(|e| {
+                            log::error!("Failed to reject message: {:?}", e);
+                        });
                     }
                 }
             }
@@ -552,7 +510,7 @@ impl BroccoliQueue {
     pub async fn process_messages_with_handlers<T, F, MessageFut, SuccessFut, ErrorFut, S, E>(
         &self,
         topic: &str,
-        concurrency: usize,
+        concurrency: Option<usize>,
         message_handler: F,
         on_success: S,
         on_error: E,
@@ -569,55 +527,80 @@ impl BroccoliQueue {
         let handles = FuturesUnordered::new();
 
         loop {
-            while handles.len() < concurrency {
-                let broker = Arc::clone(&self.broker);
-                let topic = topic.to_string();
-                let message_handler = message_handler.clone();
-                let on_success = on_success.clone();
-                let on_error = on_error.clone();
+            if let Some(concurrency) = concurrency {
+                while handles.len() < concurrency {
+                    let broker = Arc::clone(&self.broker);
+                    let topic = topic.to_string();
+                    let message_handler = message_handler.clone();
+                    let on_success = on_success.clone();
+                    let on_error = on_error.clone();
 
-                let handle = tokio::spawn(async move {
-                    loop {
-                        let serialized_message = broker
-                            .consume(&topic)
-                            .await
-                            .map_err(|e| {
-                                log::error!("Failed to consume message: {:?}", e);
-                            })
-                            .unwrap();
+                    let handle = tokio::spawn(async move {
+                        loop {
+                            let message = broker
+                                .consume(&topic)
+                                .await
+                                .map_err(|e| {
+                                    log::error!("Failed to consume message: {:?}", e);
+                                })
+                                .unwrap();
 
-                        let message: BrokerMessage<T> = serde_json::from_str(&serialized_message)
-                            .map_err(|e| {
-                                log::error!("Failed to deserialize message: {:?}", e);
-                            })
-                            .unwrap();
-
-                        match message_handler(message.clone()).await {
-                            Ok(_) => {
-                                let _ = on_success(message).await.map_err(|e| {
-                                    log::error!("Success Handler to process message: {:?}", e)
-                                });
-                                let _ = broker
-                                    .acknowledge(&topic, serialized_message)
-                                    .await
-                                    .map_err(|e| {
-                                        log::error!("Failed to acknowledge message: {:?}", e)
+                            match message_handler((&message).into()).await {
+                                Ok(_) => {
+                                    let _ = on_success((&message).into()).await.map_err(|e| {
+                                        log::error!("Success Handler to process message: {:?}", e)
                                     });
-                            }
-                            Err(e) => {
-                                let _ = on_error(message, e).await.map_err(|e| {
-                                    log::error!("Error Handler to process message: {:?}", e)
-                                });
-                                let _ = broker
-                                    .reject(&topic, serialized_message)
-                                    .await
-                                    .map_err(|e| log::error!("Failed to reject message: {:?}", e));
+                                    let _ =
+                                        broker.acknowledge(&topic, message).await.map_err(|e| {
+                                            log::error!("Failed to acknowledge message: {:?}", e)
+                                        });
+                                }
+                                Err(e) => {
+                                    let _ = on_error((&message).into(), e).await.map_err(|e| {
+                                        log::error!("Error Handler to process message: {:?}", e)
+                                    });
+                                    let _ = broker.reject(&topic, message).await.map_err(|e| {
+                                        log::error!("Failed to reject message: {:?}", e)
+                                    });
+                                }
                             }
                         }
-                    }
-                });
+                    });
 
-                handles.push(handle);
+                    handles.push(handle);
+                }
+            } else {
+                let message = self
+                    .broker
+                    .consume(topic)
+                    .await
+                    .map_err(|e| {
+                        log::error!("Failed to consume message: {:?}", e);
+                    })
+                    .unwrap();
+
+                match message_handler((&message).into()).await {
+                    Ok(_) => {
+                        let _ = on_success((&message).into()).await.map_err(|e| {
+                            log::error!("Success Handler to process message: {:?}", e)
+                        });
+                        let _ = self
+                            .broker
+                            .acknowledge(topic, message)
+                            .await
+                            .map_err(|e| log::error!("Failed to acknowledge message: {:?}", e));
+                    }
+                    Err(e) => {
+                        let _ = on_error((&message).into(), e)
+                            .await
+                            .map_err(|e| log::error!("Error Handler to process message: {:?}", e));
+                        let _ = self
+                            .broker
+                            .reject(topic, message)
+                            .await
+                            .map_err(|e| log::error!("Failed to reject message: {:?}", e));
+                    }
+                }
             }
         }
     }

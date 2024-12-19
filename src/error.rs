@@ -52,7 +52,7 @@ pub enum BroccoliError {
     ///
     /// This variant can wrap any error that implements the Error trait and is Send + Sync.
     #[error("Job error: {0}")]
-    Job(Box<dyn std::error::Error + Send + Sync>),
+    Job(String),
 
     /// Represents connection timeout errors.
     ///
