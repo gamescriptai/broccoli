@@ -85,6 +85,20 @@ pub trait Broker: Send + Sync {
     /// # Returns
     /// A `Result` indicating success or failure.
     async fn cancel(&self, queue_name: &str, message_id: String) -> Result<(), BroccoliError>;
+
+    /// Gets the position of a message in the queue.
+    ///
+    /// # Arguments
+    /// * `queue_name` - The name of the queue.
+    /// * `message_id` - The ID of the message.
+    ///
+    /// # Returns
+    /// A `Result` containing the position of the message in the queue, or `None` if the message is not found.
+    async fn get_message_position(
+        &self,
+        queue_name: &str,
+        message_id: String,
+    ) -> Result<Option<usize>, BroccoliError>;
 }
 
 /// Configuration options for broker behavior.

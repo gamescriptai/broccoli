@@ -328,6 +328,47 @@ impl BroccoliQueue {
         Ok(())
     }
 
+    /// Cancels the processing of a message, deleting it from the queue.
+    ///
+    /// # Arguments
+    /// * `topic` - The name of the topic.
+    /// * `message_id` - The ID of the message to cancel.
+    ///
+    /// # Returns
+    /// A `Result` indicating success or failure.
+    pub async fn cancel(&self, topic: &str, message_id: String) -> Result<(), BroccoliError> {
+        self.broker
+            .cancel(topic, message_id)
+            .await
+            .map_err(|e| BroccoliError::Cancel(format!("Failed to cancel message: {:?}", e)))?;
+
+        Ok(())
+    }
+
+    /// Gets the position of a message in the queue.
+    ///
+    /// # Arguments
+    /// * `topic` - The name of the topic.
+    /// * `message_id` - The ID of the message.
+    ///
+    /// # Returns
+    /// A `Result` containing the position of the message in the queue, or `None` if the message is not found.
+    pub async fn get_message_position(
+        &self,
+        topic: &str,
+        message_id: String,
+    ) -> Result<Option<usize>, BroccoliError> {
+        self.broker
+            .get_message_position(topic, message_id)
+            .await
+            .map_err(|e| {
+                BroccoliError::GetMessagePosition(format!(
+                    "Failed to get message position: {:?}",
+                    e
+                ))
+            })
+    }
+
     /// Processes messages from the specified topic with the provided handler function.
     ///
     /// # Example

@@ -50,7 +50,9 @@ async fn main() -> Result<(), BroccoliError> {
 
     // Publish jobs in batch
     println!("Publishing jobs...");
-    queue.publish_batch("jobs", jobs).await?;
+    let jobs = queue.publish_batch("jobs", jobs).await?;
+
+    println!("Published jobs: {:?}", jobs);
 
     Ok(())
 }

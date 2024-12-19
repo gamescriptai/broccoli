@@ -1,4 +1,4 @@
-use redis::AsyncCommands;
+use redis::{AsyncCommands, LposOptions};
 
 use crate::{
     brokers::broker::{Broker, BrokerConfig, InternalBrokerMessage},
@@ -317,5 +317,22 @@ impl Broker for RedisBroker {
         redis_connection.del::<&str, String>(&message_id).await?;
 
         Ok(())
+    }
+
+    /// Gets the position of a message in the queue.
+    async fn get_message_position(
+        &self,
+        queue_name: &str,
+        message_id: String,
+    ) -> Result<Option<usize>, BroccoliError> {
+        let redis_pool = self.ensure_pool()?;
+
+        let mut redis_connection = get_redis_connection(&redis_pool).await?;
+
+        let position = redis_connection
+            .lpos::<&str, &str, Option<usize>>(queue_name, &message_id, LposOptions::default())
+            .await?;
+
+        Ok(position)
     }
 }

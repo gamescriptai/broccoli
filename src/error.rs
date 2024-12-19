@@ -36,6 +36,21 @@ pub enum BroccoliError {
     #[error("Failed to acknowledge message: {0}")]
     Acknowledge(String),
 
+    /// Represents errors that occur during message cacnelling.
+    ///
+    /// # Examples
+    /// - Failed to cancel message processing
+    /// - Failed to remove message from processing queue
+    #[error("Failed to cancel message: {0}")]
+    Cancel(String),
+
+    /// Represents errors that occur during getting a messages position.
+    ///
+    /// # Examples
+    /// - Failed to get message position
+    #[error("Failed to get message position: {0}")]
+    GetMessagePosition(String),
+
     /// Represents errors that occur during message serialization/deserialization.
     ///
     /// This variant wraps the underlying serde_json error.
