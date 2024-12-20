@@ -59,9 +59,9 @@ async fn main() -> Result<(), BroccoliError> {
             "jobs",
             scheduled_jobs,
             Some(PublishOptions {
-                delay: None,
+                delay: Some(Duration::seconds(10)),
                 scheduled_at: None,
-                ttl: Some(Duration::seconds(5)),
+                ttl: None,
             }),
         )
         .await?;

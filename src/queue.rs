@@ -299,7 +299,9 @@ impl BroccoliQueue {
         Ok(messages.into_iter().map(Into::into).collect())
     }
 
-    /// Consumes a message from the specified topic.
+    /// Consumes a message from the specified topic. This method will block until a message is available.
+    /// This will not acknowledge the message, use `acknowledge` to remove the message from the processing queue,
+    /// or `reject` to move the message to the failed queue.
     ///
     /// # Arguments
     /// * `topic` - The name of the topic.
@@ -318,7 +320,9 @@ impl BroccoliQueue {
         Ok(message.into())
     }
 
-    /// Consumes a batch of messages from the specified topic.
+    /// Consumes a batch of messages from the specified topic. This method will block until the specified number of messages are consumed.
+    /// This will not acknowledge the message, use `acknowledge` to remove the message from the processing queue,
+    /// or `reject` to move the message to the failed queue.
     ///
     /// # Arguments
     /// * `topic` - The name of the topic.
@@ -345,7 +349,9 @@ impl BroccoliQueue {
         Ok(messages)
     }
 
-    /// Attempts to consume a message from the specified topic.
+    /// Attempts to consume a message from the specified topic. This method will not block, returning immediately if no message is available.
+    /// This will not acknowledge the message, use `acknowledge` to remove the message from the processing queue,
+    /// or `reject` to move the message to the failed queue.
     ///
     /// # Arguments
     /// * `topic` - The name of the topic.
@@ -387,6 +393,27 @@ impl BroccoliQueue {
             .map_err(|e| {
                 BroccoliError::Acknowledge(format!("Failed to acknowledge message: {:?}", e))
             })?;
+
+        Ok(())
+    }
+
+    /// Rejects the processing of a message, moving it to the failed queue.
+    ///
+    /// # Arguments
+    /// * `topic` - The name of the topic.
+    /// * `message` - The message to be rejected.
+    ///
+    /// # Returns
+    /// A `Result` indicating success or failure.
+    pub async fn reject<T: Clone + serde::Serialize + serde::de::DeserializeOwned>(
+        &self,
+        topic: &str,
+        message: BrokerMessage<T>,
+    ) -> Result<(), BroccoliError> {
+        self.broker
+            .reject(topic, message.into())
+            .await
+            .map_err(|e| BroccoliError::Reject(format!("Failed to reject message: {:?}", e)))?;
 
         Ok(())
     }
@@ -436,7 +463,7 @@ impl BroccoliQueue {
     ///
     /// # Example
     ///
-    /// ```rust
+    /// ```no_run
     /// use broccoli_queue::queue::BroccoliQueue;
     /// use broccoli_queue::brokers::broker::BrokerMessage;
     ///
@@ -549,12 +576,12 @@ impl BroccoliQueue {
     ///
     /// # Example
     ///
-    /// ```rust
+    /// ```no_run
     /// use broccoli_queue::queue::BroccoliQueue;
     /// use broccoli_queue::brokers::broker::BrokerMessage;
     /// use broccoli_queue::error::BroccoliError;
     ///
-    /// #[derive(Debug, Clone, serde::Serialize, serde::Deserializ)]
+    /// #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
     /// struct JobPayload {
     ///     id: String,
     ///     task_name: String,
@@ -589,7 +616,7 @@ impl BroccoliQueue {
     ///     // Process messages with 3 concurrent workers
     ///     queue.process_messages_with_handlers(
     ///         "jobs",
-    ///         3,
+    ///         Some(3),
     ///         process_message,
     ///         on_success,
     ///         on_error

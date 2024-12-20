@@ -36,6 +36,14 @@ pub enum BroccoliError {
     #[error("Failed to acknowledge message: {0}")]
     Acknowledge(String),
 
+    /// Represents errors that occur during message rejection.
+    ///
+    /// # Examples
+    /// - Failed to reject message processing
+    /// - Failed to remove message from processing queue
+    #[error("Failed to reject message: {0}")]
+    Reject(String),
+
     /// Represents errors that occur during message cacnelling.
     ///
     /// # Examples

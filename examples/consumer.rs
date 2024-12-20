@@ -48,11 +48,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Process regular jobs
     queue
-        .process_messages(
-            "jobs",
-            None,
-            |msg| async move { process_job(msg.payload).await },
-        )
+        .process_messages("jobs", Some(4), |msg| async move {
+            process_job(msg.payload).await
+        })
         .await
         .unwrap();
 
