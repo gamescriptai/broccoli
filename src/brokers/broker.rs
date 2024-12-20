@@ -1,4 +1,4 @@
-use crate::error::BroccoliError;
+use crate::{error::BroccoliError, queue::PublishOptions};
 
 /// Trait for message broker implementations.
 #[async_trait::async_trait]
@@ -24,6 +24,7 @@ pub trait Broker: Send + Sync {
         &self,
         queue_name: &str,
         message: &[InternalBrokerMessage],
+        options: Option<PublishOptions>,
     ) -> Result<Vec<InternalBrokerMessage>, BroccoliError>;
 
     /// Attempts to consume a message from the specified queue.

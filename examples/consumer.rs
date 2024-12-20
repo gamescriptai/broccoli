@@ -23,7 +23,7 @@ async fn process_job(job: JobPayload) -> Result<(), BroccoliError> {
     // Simulate some work
     tokio::time::sleep(Duration::from_secs(1)).await;
 
-    Err(BroccoliError::Job("Failed to process job".to_string()))
+    Ok(())
 }
 
 async fn success_handler(msg: JobPayload) -> Result<(), BroccoliError> {

@@ -1,10 +1,7 @@
-use std::{
-    future::Future,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{future::Future, sync::Arc, time::Instant};
 
 use futures::stream::FuturesUnordered;
+use time::{Duration, OffsetDateTime};
 
 use crate::{
     brokers::{
@@ -151,6 +148,70 @@ impl BroccoliQueueBuilder {
     }
 }
 
+/// Options for publishing messages to the broker.
+#[derive(Debug, Default)]
+pub struct PublishOptions {
+    /// Time-to-live for the message
+    pub ttl: Option<Duration>,
+    /// Delay before the message is published
+    pub delay: Option<Duration>,
+    /// Scheduled time for the message to be published
+    pub scheduled_at: Option<OffsetDateTime>,
+}
+
+impl PublishOptions {
+    /// Creates a new PublishOptionsBuilder.
+    pub fn builder() -> PublishOptionsBuilder {
+        PublishOptionsBuilder::new()
+    }
+}
+
+/// Builder for constructing PublishOptions with a fluent interface.
+#[derive(Default, Debug)]
+pub struct PublishOptionsBuilder {
+    ttl: Option<Duration>,
+    delay: Option<Duration>,
+    scheduled_at: Option<OffsetDateTime>,
+}
+
+impl PublishOptionsBuilder {
+    /// Creates a new PublishOptionsBuilder with default values.
+    pub fn new() -> Self {
+        Self {
+            ttl: None,
+            delay: None,
+            scheduled_at: None,
+        }
+    }
+
+    /// Sets the time-to-live duration for the message.
+    pub fn ttl(mut self, duration: Duration) -> Self {
+        self.ttl = Some(duration);
+        self
+    }
+
+    /// Sets a delay before the message is published.
+    pub fn delay(mut self, duration: Duration) -> Self {
+        self.delay = Some(duration);
+        self
+    }
+
+    /// Sets a specific time for the message to be published.
+    pub fn schedule_at(mut self, time: OffsetDateTime) -> Self {
+        self.scheduled_at = Some(time);
+        self
+    }
+
+    /// Builds the PublishOptions with the configured values.
+    pub fn build(self) -> PublishOptions {
+        PublishOptions {
+            ttl: self.ttl,
+            delay: self.delay,
+            scheduled_at: self.scheduled_at,
+        }
+    }
+}
+
 /// Main queue interface for interacting with the message broker.
 ///
 /// BroccoliQueue provides methods for publishing and consuming messages,
@@ -192,12 +253,13 @@ impl BroccoliQueue {
         &self,
         topic: &str,
         message: &T,
+        options: Option<PublishOptions>,
     ) -> Result<BrokerMessage<T>, BroccoliError> {
         let message = BrokerMessage::new(message.clone());
 
         let message = self
             .broker
-            .publish(topic, &[message.into()])
+            .publish(topic, &[message.into()], options)
             .await
             .map_err(|e| BroccoliError::Publish(format!("Failed to publish message: {:?}", e)))?
             .pop()
@@ -218,6 +280,7 @@ impl BroccoliQueue {
         &self,
         topic: &str,
         messages: impl IntoIterator<Item = T>,
+        options: Option<PublishOptions>,
     ) -> Result<Vec<BrokerMessage<T>>, BroccoliError> {
         let messages: Vec<BrokerMessage<T>> =
             messages.into_iter().map(BrokerMessage::new).collect();
@@ -229,7 +292,7 @@ impl BroccoliQueue {
 
         let messages = self
             .broker
-            .publish(topic, &internal_messages)
+            .publish(topic, &internal_messages, options)
             .await
             .map_err(|e| BroccoliError::Publish(format!("Failed to publish messages: {:?}", e)))?;
 
@@ -377,11 +440,10 @@ impl BroccoliQueue {
     /// use broccoli_queue::queue::BroccoliQueue;
     /// use broccoli_queue::brokers::broker::BrokerMessage;
     ///
-    /// #[derive(Debug, Clone, Serialize, Deserialize)]
+    /// #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
     /// struct JobPayload {
     ///    id: String,
     ///    task_name: String,
-    ///    parameters: Parameters,
     ///    created_at: chrono::DateTime<chrono::Utc>,
     /// }
     ///
@@ -460,14 +522,10 @@ impl BroccoliQueue {
                     handles.push(handle);
                 }
             } else {
-                let message = self
-                    .broker
-                    .consume(topic)
-                    .await
-                    .map_err(|e| {
-                        log::error!("Failed to consume message: {:?}", e);
-                    })
-                    .unwrap();
+                let message = self.broker.consume(topic).await.map_err(|e| {
+                    log::error!("Failed to consume message: {:?}", e);
+                    BroccoliError::Consume(format!("Failed to consume message: {:?}", e))
+                })?;
 
                 match handler((&message).into()).await {
                     Ok(_) => {
@@ -496,7 +554,7 @@ impl BroccoliQueue {
     /// use broccoli_queue::brokers::broker::BrokerMessage;
     /// use broccoli_queue::error::BroccoliError;
     ///
-    /// #[derive(Debug, Clone, Serialize, Deserialize)]
+    /// #[derive(Debug, Clone, serde::Serialize, serde::Deserializ)]
     /// struct JobPayload {
     ///     id: String,
     ///     task_name: String,

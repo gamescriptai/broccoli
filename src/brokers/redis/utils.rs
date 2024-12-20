@@ -3,12 +3,12 @@
 //! This module provides helper methods for managing Redis message operations,
 //! including message parsing and manipulation of message metadata.
 
-use super::broker::{RedisBroker, RedisPool};
+use super::broker::{RedisBroker, RedisConnection, RedisPool};
 use crate::{
     brokers::broker::{BrokerConfig, InternalBrokerMessage},
     error::BroccoliError,
 };
-use redis::FromRedisValue;
+use redis::{AsyncCommands, FromRedisValue};
 
 impl RedisBroker {
     /// Creates a new `RedisBroker` instance with default configuration.
@@ -33,11 +33,76 @@ impl RedisBroker {
     }
 
     pub(crate) fn ensure_pool(&self) -> Result<RedisPool, BroccoliError> {
+        if !self.connected {
+            return Err(BroccoliError::Broker(
+                "Redis broker not connected".to_string(),
+            ));
+        }
         match &self.redis_pool {
             Some(pool) => Ok(pool.clone()),
             None => Err(BroccoliError::Broker(
                 "Redis pool not initialized".to_string(),
             )),
+        }
+    }
+
+    pub(crate) async fn get_task_id(
+        &self,
+        queue_name: &str,
+        redis_connection: &mut RedisConnection<'_>,
+    ) -> Result<Option<String>, BroccoliError> {
+        let expired_messages: Vec<String> = redis_connection
+            .zrangebyscore(
+                "expired_messages",
+                0,
+                time::OffsetDateTime::now_utc().unix_timestamp(),
+            )
+            .await?;
+
+        if !expired_messages.is_empty() {
+            for expired_message in expired_messages.iter() {
+                let task_id = expired_message.clone();
+                redis_connection
+                    .lrem::<&str, &str, String>(queue_name, 1, &task_id) // Remove from queue
+                    .await?;
+            }
+
+            redis_connection
+                .del::<&Vec<String>, String>(&expired_messages)
+                .await?; // Remove message
+
+            redis_connection
+                .zrem::<&str, &Vec<String>, String>("scheduled_messages", &expired_messages) // Remove from scheduled
+                .await?;
+
+            redis_connection
+                .zrem::<&str, Vec<String>, String>("expired_messages", expired_messages) // Remove from expired
+                .await?;
+        }
+
+        let scheduled_messages: Vec<String> = redis_connection
+            .zrangebyscore(
+                "scheduled_messages",
+                0,
+                time::OffsetDateTime::now_utc().unix_timestamp(),
+            )
+            .await?;
+
+        if !scheduled_messages.is_empty() {
+            let task_id = scheduled_messages[0].clone();
+            redis_connection
+                .zrem::<&str, &str, String>("scheduled_messages", &task_id)
+                .await?;
+            Ok(Some(task_id))
+        } else {
+            Ok(redis_connection
+                .lmove(
+                    queue_name,
+                    format!("{}_processing", queue_name),
+                    redis::Direction::Right,
+                    redis::Direction::Left,
+                )
+                .await?)
         }
     }
 }

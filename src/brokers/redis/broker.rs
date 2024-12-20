@@ -3,10 +3,12 @@ use redis::{AsyncCommands, LposOptions};
 use crate::{
     brokers::broker::{Broker, BrokerConfig, InternalBrokerMessage},
     error::BroccoliError,
+    queue::PublishOptions,
 };
 
 pub(crate) type RedisPool = bb8_redis::bb8::Pool<bb8_redis::RedisConnectionManager>;
-type RedisConnection<'a> = bb8_redis::bb8::PooledConnection<'a, bb8_redis::RedisConnectionManager>;
+pub(crate) type RedisConnection<'a> =
+    bb8_redis::bb8::PooledConnection<'a, bb8_redis::RedisConnectionManager>;
 
 #[derive(Default)]
 /// A message broker implementation for Redis.
@@ -100,9 +102,15 @@ impl Broker for RedisBroker {
         &self,
         queue_name: &str,
         messages: &[InternalBrokerMessage],
+        publish_options: Option<PublishOptions>,
     ) -> Result<Vec<InternalBrokerMessage>, BroccoliError> {
         let redis_pool = self.ensure_pool()?;
         let mut redis_connection = get_redis_connection(&redis_pool).await?;
+        let dont_push_to_queue = publish_options
+            .as_ref()
+            .map(|options| options.delay.is_some() || options.scheduled_at.is_some())
+            .unwrap_or(false);
+
         for msg in messages {
             let attempts = msg.attempts.to_string();
             let items: Vec<(&str, &str)> = vec![
@@ -114,8 +122,47 @@ impl Broker for RedisBroker {
             redis_connection
                 .hset_multiple::<&str, &str, &str, String>(&msg.task_id.to_string(), &items)
                 .await?;
+
+            if let Some(ref publish_options) = publish_options {
+                if let Some(delay) = publish_options.delay {
+                    let timestamp = time::OffsetDateTime::now_utc().saturating_add(delay);
+                    redis_connection
+                        .zadd::<&str, i64, &str, String>(
+                            "scheduled_messages",
+                            &msg.task_id.to_string(),
+                            timestamp.unix_timestamp(),
+                        )
+                        .await?;
+                }
+
+                if let Some(timestamp) = publish_options.scheduled_at {
+                    redis_connection
+                        .zadd::<&str, i64, &str, String>(
+                            "scheduled_messages",
+                            &msg.task_id.to_string(),
+                            timestamp.unix_timestamp(),
+                        )
+                        .await?;
+                }
+
+                if let Some(ttl) = publish_options.ttl {
+                    let timestamp = time::OffsetDateTime::now_utc().saturating_add(ttl);
+                    redis_connection
+                        .zadd::<&str, i64, &str, String>(
+                            "expired_messages",
+                            &msg.task_id.to_string(),
+                            timestamp.unix_timestamp(),
+                        )
+                        .await?;
+                }
+            }
         }
 
+        if dont_push_to_queue {
+            return Ok(messages.to_vec());
+        }
+
+        // Push the message to the queue unless it is scheduled or delayed.
         redis_connection
             .lpush::<&str, Vec<String>, String>(
                 queue_name,
@@ -129,7 +176,8 @@ impl Broker for RedisBroker {
         Ok(messages.to_vec())
     }
 
-    /// Attempts to consume a message from the specified queue.
+    /// Attempts to consume a message from the specified queue. Will not block if no message is available.
+    /// This will check for scheduled messages first and then attempt to consume a message from the queue.
     ///
     /// # Arguments
     /// * `queue_name` - The name of the queue.
@@ -144,22 +192,18 @@ impl Broker for RedisBroker {
         let redis_pool = self.ensure_pool()?;
         let mut redis_connection = get_redis_connection(&redis_pool).await?;
 
-        let task_id: String = redis_connection
-            .blmove(
-                queue_name,
-                format!("{}_processing", queue_name),
-                redis::Direction::Right,
-                redis::Direction::Left,
-                1.0,
-            )
-            .await?;
+        let task_id: Option<String> = self.get_task_id(queue_name, &mut redis_connection).await?;
+
+        if task_id.is_none() {
+            return Ok(None);
+        }
 
         let payload = redis_connection
             .hgetall(&task_id)
             .await
             .map_err(|e| BroccoliError::Consume(format!("Failed to consume message: {:?}", e)))?;
 
-        Ok(Some(payload))
+        Ok(payload)
     }
 
     /// Consumes a message from the specified queue, blocking until a message is available.
@@ -170,42 +214,14 @@ impl Broker for RedisBroker {
     /// # Returns
     /// A `Result` containing the message as a `String`, or a `BroccoliError` on failure.
     async fn consume(&self, queue_name: &str) -> Result<InternalBrokerMessage, BroccoliError> {
-        let redis_pool = self.ensure_pool()?;
-
-        let mut redis_connection = get_redis_connection(&redis_pool).await?;
-        let mut broken_pipe_sleep = std::time::Duration::from_secs(10);
+        self.ensure_pool()?;
         let mut message: Option<InternalBrokerMessage> = None;
 
         while message.is_none() {
-            let task_id_result: Result<String, _> = redis_connection
-                .blmove(
-                    queue_name,
-                    format!("{}_processing", queue_name),
-                    redis::Direction::Right,
-                    redis::Direction::Left,
-                    1.0,
-                )
-                .await;
-
-            let task_id = if let Ok(task_id) = task_id_result {
-                broken_pipe_sleep = std::time::Duration::from_secs(10);
-
-                if task_id.is_empty() {
-                    continue;
-                }
-
-                task_id.clone()
-            } else {
-                if task_id_result.is_err_and(|err| err.is_io_error()) {
-                    tokio::time::sleep(broken_pipe_sleep).await;
-                    broken_pipe_sleep =
-                        std::cmp::min(broken_pipe_sleep * 2, std::time::Duration::from_secs(300));
-                }
-
-                continue;
-            };
-
-            message = redis_connection.hgetall(&task_id).await?;
+            message = self.try_consume(queue_name).await?;
+            if message.is_none() {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
         }
 
         Ok(message.expect("Must have a message to exit loop"))
@@ -297,7 +313,7 @@ impl Broker for RedisBroker {
                 .await?;
 
             redis_connection
-                .hset::<&str, &str, u8, String>(&message.task_id, "attempts", attempts)
+                .hincr::<&str, &str, u8, String>(&message.task_id, "attempts", 1)
                 .await?;
         }
 
@@ -305,6 +321,13 @@ impl Broker for RedisBroker {
     }
 
     /// Cancels a message, removing it from the queue.
+    ///
+    /// # Arguments
+    /// * `queue_name` - The name of the queue.
+    /// * `message_id` - The ID of the message to be canceled.
+    ///
+    /// # Returns
+    /// A `Result` indicating success or failure.
     async fn cancel(&self, queue_name: &str, message_id: String) -> Result<(), BroccoliError> {
         let redis_pool = self.ensure_pool()?;
 
@@ -320,6 +343,13 @@ impl Broker for RedisBroker {
     }
 
     /// Gets the position of a message in the queue.
+    ///
+    /// # Arguments
+    /// * `queue_name` - The name of the queue.
+    /// * `message_id` - The ID of the message.
+    ///
+    /// # Returns
+    /// A `Result` containing the position of the message in the queue, or `None` if the message is not found.
     async fn get_message_position(
         &self,
         queue_name: &str,

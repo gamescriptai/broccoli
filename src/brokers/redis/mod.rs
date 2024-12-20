@@ -1,4 +1,4 @@
-/// Module: redis
+/// Contains the Redis Broker implementation
 pub mod broker;
-/// Module: utils
-pub mod utils;
+/// Utility functions for the Redis Broker
+pub(crate) mod utils;
