@@ -13,7 +13,7 @@ struct TestMessage {
 #[tokio::test]
 async fn test_publish_and_consume() {
     let queue = common::setup_queue().await;
-    let test_topic = "test_topic";
+    let test_topic = "test_publish_topic";
 
     // Test message
     let message = TestMessage {
@@ -35,7 +35,6 @@ async fn test_publish_and_consume() {
 
     assert_eq!(published.payload, consumed.payload);
     assert_eq!(published.task_id, consumed.task_id);
-    common::clear_redis().await;
 }
 
 #[tokio::test]
@@ -70,7 +69,6 @@ async fn test_batch_publish_and_consume() {
     assert_eq!(published.len(), consumed.len());
     assert_eq!(published[0].payload, consumed[0].payload);
     assert_eq!(published[1].payload, consumed[1].payload);
-    common::clear_redis().await;
 }
 
 #[tokio::test]
@@ -110,7 +108,6 @@ async fn test_delayed_message() {
         .expect("Failed to consume delayed message");
 
     assert_eq!(message.content, delayed_result.payload.content);
-    common::clear_redis().await;
 }
 
 #[tokio::test]
@@ -150,7 +147,6 @@ async fn test_scheduled_message() {
         .expect("Failed to consume scheduled message");
 
     assert_eq!(published.payload.content, scheduled_result.payload.content);
-    common::clear_redis().await;
 }
 
 #[tokio::test]
@@ -193,7 +189,6 @@ async fn test_message_retry() {
         .await
         .unwrap();
     assert!(failed_result.is_some());
-    common::clear_redis().await;
 }
 
 #[tokio::test]
@@ -226,7 +221,6 @@ async fn test_message_acknowledgment() {
     // Try to consume again - should be none
     let result = queue.try_consume::<TestMessage>(test_topic).await.unwrap();
     assert!(result.is_none());
-    common::clear_redis().await;
 }
 
 #[tokio::test]
@@ -254,7 +248,6 @@ async fn test_message_cancellation() {
     // Try to consume - should be none
     let result = queue.try_consume::<TestMessage>(test_topic).await.unwrap();
     assert!(result.is_none());
-    common::clear_redis().await;
 }
 
 #[tokio::test]
@@ -291,5 +284,4 @@ async fn test_queue_position() {
         .expect("Message not found");
 
     assert_eq!(position, 1);
-    common::clear_redis().await;
 }

@@ -53,7 +53,7 @@ impl RedisBroker {
     ) -> Result<Option<String>, BroccoliError> {
         let expired_messages: Vec<String> = redis_connection
             .zrangebyscore(
-                "expired_messages",
+                format!("{}_expired_messages", queue_name),
                 0,
                 time::OffsetDateTime::now_utc().unix_timestamp(),
             )
@@ -72,17 +72,23 @@ impl RedisBroker {
                 .await?; // Remove message
 
             redis_connection
-                .zrem::<&str, &Vec<String>, String>("scheduled_messages", &expired_messages) // Remove from scheduled
+                .zrem::<String, &Vec<String>, String>(
+                    format!("{}_scheduled_messages", queue_name),
+                    &expired_messages,
+                ) // Remove from scheduled
                 .await?;
 
             redis_connection
-                .zrem::<&str, Vec<String>, String>("expired_messages", expired_messages) // Remove from expired
+                .zrem::<String, Vec<String>, String>(
+                    format!("{}_expired_messages", queue_name),
+                    expired_messages,
+                ) // Remove from expired
                 .await?;
         }
 
         let scheduled_messages: Vec<String> = redis_connection
             .zrangebyscore(
-                "scheduled_messages",
+                format!("{}_scheduled_messages", queue_name),
                 0,
                 time::OffsetDateTime::now_utc().unix_timestamp(),
             )
@@ -91,7 +97,10 @@ impl RedisBroker {
         if !scheduled_messages.is_empty() {
             let task_id = scheduled_messages[0].clone();
             redis_connection
-                .zrem::<&str, &str, String>("scheduled_messages", &task_id)
+                .zrem::<String, &str, String>(
+                    format!("{}_scheduled_messages", queue_name),
+                    &task_id,
+                )
                 .await?;
             Ok(Some(task_id))
         } else {

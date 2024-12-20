@@ -127,8 +127,8 @@ impl Broker for RedisBroker {
                 if let Some(delay) = publish_options.delay {
                     let timestamp = time::OffsetDateTime::now_utc().saturating_add(delay);
                     redis_connection
-                        .zadd::<&str, i64, &str, String>(
-                            "scheduled_messages",
+                        .zadd::<String, i64, &str, String>(
+                            format!("{}_scheduled_messages", queue_name),
                             &msg.task_id.to_string(),
                             timestamp.unix_timestamp(),
                         )
@@ -137,8 +137,8 @@ impl Broker for RedisBroker {
 
                 if let Some(timestamp) = publish_options.scheduled_at {
                     redis_connection
-                        .zadd::<&str, i64, &str, String>(
-                            "scheduled_messages",
+                        .zadd::<String, i64, &str, String>(
+                            format!("{}_scheduled_messages", queue_name),
                             &msg.task_id.to_string(),
                             timestamp.unix_timestamp(),
                         )
@@ -148,8 +148,8 @@ impl Broker for RedisBroker {
                 if let Some(ttl) = publish_options.ttl {
                     let timestamp = time::OffsetDateTime::now_utc().saturating_add(ttl);
                     redis_connection
-                        .zadd::<&str, i64, &str, String>(
-                            "expired_messages",
+                        .zadd::<String, i64, &str, String>(
+                            format!("{}_expired_messages", queue_name),
                             &msg.task_id.to_string(),
                             timestamp.unix_timestamp(),
                         )

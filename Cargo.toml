@@ -26,5 +26,4 @@ time = "0.3.37"
 tokio = { version = "1.42.0", features = ["full"] }
 chrono = { version = "0.4.39", features = ["serde"] }
 env_logger = "0.11.5"
-serial_test = "2.0"
 lazy_static = "1.4"

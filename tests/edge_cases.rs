@@ -1,6 +1,5 @@
 use broccoli_queue::queue::PublishOptions;
 use serde::{Deserialize, Serialize};
-use serial_test::serial;
 use time::Duration;
 
 mod common;
@@ -12,14 +11,12 @@ struct TestMessage {
 }
 
 #[tokio::test]
-#[serial]
 async fn test_invalid_broker_url() {
     let result = common::setup_queue_with_url("invalid://localhost:6379").await;
     assert!(result.is_err());
 }
 
 #[tokio::test]
-#[serial]
 async fn test_empty_payload() {
     let queue = common::setup_queue().await;
     let test_topic = "test_empty_topic";
@@ -34,11 +31,9 @@ async fn test_empty_payload() {
 
     let consumed = queue.consume::<TestMessage>(test_topic).await.unwrap();
     assert_eq!(consumed.payload, empty_message);
-    common::clear_redis().await;
 }
 
 #[tokio::test]
-#[serial]
 async fn test_very_large_payload() {
     let queue = common::setup_queue().await;
     let test_topic = "test_large_topic";
@@ -54,11 +49,9 @@ async fn test_very_large_payload() {
 
     let consumed = queue.consume::<TestMessage>(test_topic).await.unwrap();
     assert_eq!(consumed.payload.content.len(), large_content.len());
-    common::clear_redis().await;
 }
 
 #[tokio::test]
-#[serial]
 async fn test_concurrent_consume() {
     let queue = common::setup_queue().await;
     let test_topic = "test_concurrent_topic";
@@ -94,11 +87,9 @@ async fn test_concurrent_consume() {
     let unique_ids: std::collections::HashSet<_> =
         consumed_messages.iter().map(|m| m.id.clone()).collect();
     assert_eq!(unique_ids.len(), 5);
-    common::clear_redis().await;
 }
 
 #[tokio::test]
-#[serial]
 async fn test_zero_ttl() {
     let queue = common::setup_queue().await;
     let test_topic = "test_zero_ttl_topic";
@@ -118,11 +109,9 @@ async fn test_zero_ttl() {
     // Message should not be available
     let result = queue.try_consume::<TestMessage>(test_topic).await.unwrap();
     assert!(result.is_none());
-    common::clear_redis().await;
 }
 
 #[tokio::test]
-#[serial]
 async fn test_message_ordering() {
     let queue = common::setup_queue().await;
     let test_topic = "test_ordering_topic";
@@ -175,5 +164,4 @@ async fn test_message_ordering() {
 
     assert_eq!(second.payload.id, "2");
     assert_eq!(first.payload.id, "1");
-    common::clear_redis().await;
 }

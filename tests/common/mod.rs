@@ -1,18 +1,11 @@
 use broccoli_queue::queue::BroccoliQueue;
 
-pub async fn clear_redis() {
-    let client = redis::Client::open("redis://localhost:6379").unwrap();
-    let mut conn = client.get_connection().unwrap();
-    redis::cmd("FLUSHALL").query::<String>(&mut conn).unwrap();
-}
-
 pub async fn setup_queue() -> BroccoliQueue {
-    clear_redis().await;
-    BroccoliQueue::builder("redis://localhost:6379")
+    BroccoliQueue::builder("redis://localhost:6380")
         .pool_connections(5)
         .build()
         .await
-        .unwrap()
+        .expect("Queue setup failed. Are you sure Redis is running on localhost:6380?")
 }
 
 pub async fn setup_queue_with_url(
