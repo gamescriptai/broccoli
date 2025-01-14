@@ -182,7 +182,7 @@ impl<T: Clone + serde::Serialize> From<BrokerMessage<T>> for InternalBrokerMessa
     fn from(msg: BrokerMessage<T>) -> Self {
         InternalBrokerMessage {
             task_id: msg.task_id.to_string(),
-            payload: serde_json::to_string(&msg.payload).unwrap(),
+            payload: serde_json::to_string(&msg.payload).unwrap_or_default(),
             attempts: msg.attempts,
         }
     }
@@ -192,33 +192,24 @@ impl<T: Clone + serde::Serialize> From<&BrokerMessage<T>> for InternalBrokerMess
     fn from(msg: &BrokerMessage<T>) -> Self {
         InternalBrokerMessage {
             task_id: msg.task_id.to_string(),
-            payload: serde_json::to_string(&msg.payload).unwrap(),
+            payload: serde_json::to_string(&msg.payload).unwrap_or_default(),
             attempts: msg.attempts,
         }
     }
 }
 
-impl<T: Clone + serde::de::DeserializeOwned + serde::Serialize> From<InternalBrokerMessage>
-    for BrokerMessage<T>
-{
-    fn from(msg: InternalBrokerMessage) -> Self {
-        BrokerMessage {
-            task_id: msg.task_id.parse().unwrap(),
-            payload: serde_json::from_str(&msg.payload).unwrap(),
-            attempts: msg.attempts,
-        }
-    }
-}
-
-impl<T: Clone + serde::de::DeserializeOwned + serde::Serialize> From<&InternalBrokerMessage>
-    for BrokerMessage<T>
-{
-    fn from(msg: &InternalBrokerMessage) -> Self {
-        BrokerMessage {
-            task_id: msg.task_id.parse().unwrap(),
-            payload: serde_json::from_str(&msg.payload).unwrap(),
-            attempts: msg.attempts,
-        }
+impl InternalBrokerMessage {
+    /// Converts the internal message to a `BrokerMessage`.
+    pub fn into_message<T: Clone + serde::de::DeserializeOwned + serde::Serialize>(
+        &self,
+    ) -> Result<BrokerMessage<T>, BroccoliError> {
+        Ok(BrokerMessage {
+            task_id: self.task_id.parse().unwrap_or_default(),
+            payload: serde_json::from_str(&self.payload).map_err(|e| {
+                BroccoliError::Broker(format!("Failed to parse message payload: {}", e))
+            })?,
+            attempts: self.attempts,
+        })
     }
 }
 

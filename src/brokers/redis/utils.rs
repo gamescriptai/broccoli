@@ -135,7 +135,7 @@ impl FromRedisValue for InternalBrokerMessage {
         Ok(InternalBrokerMessage {
             task_id: task_id.to_string(),
             payload: payload.to_string(),
-            attempts: attempts.parse().unwrap(),
+            attempts: attempts.parse().unwrap_or_default(),
         })
     }
 }

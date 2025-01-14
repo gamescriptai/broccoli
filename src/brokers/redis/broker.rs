@@ -51,8 +51,9 @@ pub(crate) async fn get_redis_connection(
         redis_conn_sleep = std::cmp::min(redis_conn_sleep * 2, std::time::Duration::from_secs(300));
     }
 
-    let redis_connection =
-        opt_redis_connection.expect("Failed to get redis connection outside of loop");
+    let redis_connection = opt_redis_connection.ok_or(BroccoliError::Broker(
+        "Failed to get redis connection".to_string(),
+    ))?;
 
     Ok(redis_connection)
 }
@@ -83,7 +84,7 @@ impl Broker for RedisBroker {
             .connection_timeout(std::time::Duration::from_secs(2))
             .build(redis_manager)
             .await
-            .expect("Failed to create redis pool");
+            .map_err(|e| BroccoliError::Broker(format!("Failed to create redis pool: {:?}", e)))?;
 
         self.redis_pool = Some(redis_pool);
         self.connected = true;
@@ -224,7 +225,11 @@ impl Broker for RedisBroker {
             }
         }
 
-        Ok(message.expect("Must have a message to exit loop"))
+        let message = message.ok_or(BroccoliError::Consume(
+            "Failed to consume message: No message available".to_string(),
+        ))?;
+
+        Ok(message)
     }
 
     /// Acknowledges the processing of a message, removing it from the processing queue.
