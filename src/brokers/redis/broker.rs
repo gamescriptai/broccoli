@@ -1,10 +1,12 @@
-use redis::{AsyncCommands, LposOptions};
+use redis::AsyncCommands;
 
 use crate::{
-    brokers::broker::{Broker, BrokerConfig, InternalBrokerMessage},
+    brokers::broker::{Broker, BrokerConfig, InternalBrokerMessage, MetadataTypes},
     error::BroccoliError,
     queue::{ConsumeOptions, PublishOptions},
 };
+
+use super::utils::OptionalInternalBrokerMessage;
 
 pub(crate) type RedisPool = bb8_redis::bb8::Pool<bb8_redis::RedisConnectionManager>;
 pub(crate) type RedisConnection<'a> =
@@ -107,18 +109,31 @@ impl Broker for RedisBroker {
     ) -> Result<Vec<InternalBrokerMessage>, BroccoliError> {
         let redis_pool = self.ensure_pool()?;
         let mut redis_connection = get_redis_connection(&redis_pool).await?;
-        let dont_push_to_queue = publish_options
-            .as_ref()
-            .map(|options| options.delay.is_some() || options.scheduled_at.is_some())
-            .unwrap_or(false);
 
         for msg in messages {
             let attempts = msg.attempts.to_string();
+
+            let priority = publish_options
+                .clone()
+                .unwrap_or_default()
+                .priority
+                .unwrap_or(5) as i64;
+
+            if !(1..=5).contains(&priority) {
+                return Err(BroccoliError::Broker(
+                    "Priority must be between 1 and 5".to_string(),
+                ));
+            }
+
+            let priority_str = priority.to_string();
             let items: Vec<(&str, &str)> = vec![
                 ("task_id", &msg.task_id),
                 ("payload", &msg.payload),
                 ("attempts", &attempts),
+                ("priority", &priority_str),
             ];
+
+            let mut score = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
 
             redis_connection
                 .hset_multiple::<&str, &str, &str, String>(&msg.task_id.to_string(), &items)
@@ -126,53 +141,31 @@ impl Broker for RedisBroker {
 
             if let Some(ref publish_options) = publish_options {
                 if let Some(delay) = publish_options.delay {
-                    let timestamp = time::OffsetDateTime::now_utc().saturating_add(delay);
-                    redis_connection
-                        .zadd::<String, i64, &str, String>(
-                            format!("{}_scheduled_messages", queue_name),
-                            &msg.task_id.to_string(),
-                            timestamp.unix_timestamp(),
-                        )
-                        .await?;
+                    score += (delay.as_seconds_f32() * 1_000_000_000.0) as i64;
                 }
 
                 if let Some(timestamp) = publish_options.scheduled_at {
-                    redis_connection
-                        .zadd::<String, i64, &str, String>(
-                            format!("{}_scheduled_messages", queue_name),
-                            &msg.task_id.to_string(),
-                            timestamp.unix_timestamp(),
-                        )
-                        .await?;
+                    score = timestamp.unix_timestamp_nanos() as i64;
                 }
 
                 if let Some(ttl) = publish_options.ttl {
-                    let timestamp = time::OffsetDateTime::now_utc().saturating_add(ttl);
                     redis_connection
-                        .zadd::<String, i64, &str, String>(
-                            format!("{}_expired_messages", queue_name),
+                        .pexpire::<&str, String>(
                             &msg.task_id.to_string(),
-                            timestamp.unix_timestamp(),
+                            (ttl.as_seconds_f64() * 1000.0) as i64,
                         )
                         .await?;
                 }
             }
-        }
 
-        if dont_push_to_queue {
-            return Ok(messages.to_vec());
+            redis_connection
+                .zadd::<String, i64, &str, String>(
+                    queue_name.to_string(),
+                    &msg.task_id.to_string(),
+                    priority * score,
+                )
+                .await?;
         }
-
-        // Push the message to the queue unless it is scheduled or delayed.
-        redis_connection
-            .lpush::<&str, Vec<String>, String>(
-                queue_name,
-                messages
-                    .iter()
-                    .map(|msg| msg.task_id.clone())
-                    .collect::<Vec<String>>(),
-            )
-            .await?;
 
         Ok(messages.to_vec())
     }
@@ -193,21 +186,23 @@ impl Broker for RedisBroker {
     ) -> Result<Option<InternalBrokerMessage>, BroccoliError> {
         let redis_pool = self.ensure_pool()?;
         let mut redis_connection = get_redis_connection(&redis_pool).await?;
+        let mut payload: OptionalInternalBrokerMessage = OptionalInternalBrokerMessage(None);
 
-        let task_id: Option<String> = self
-            .get_task_id(queue_name, &mut redis_connection, options)
-            .await?;
+        while payload.0.is_none() {
+            let task_id: Option<String> = self
+                .get_task_id(queue_name, &mut redis_connection, options.clone())
+                .await?;
 
-        if task_id.is_none() {
-            return Ok(None);
+            if task_id.is_none() {
+                break;
+            }
+
+            payload = redis_connection.hgetall(&task_id).await.map_err(|e| {
+                BroccoliError::Consume(format!("Failed to consume message: {:?}", e))
+            })?;
         }
 
-        let payload = redis_connection
-            .hgetall(&task_id)
-            .await
-            .map_err(|e| BroccoliError::Consume(format!("Failed to consume message: {:?}", e)))?;
-
-        Ok(payload)
+        Ok(payload.0)
     }
 
     /// Consumes a message from the specified queue, blocking until a message is available.
@@ -320,8 +315,26 @@ impl Broker for RedisBroker {
             .map(|config| config.retry_failed.unwrap_or(true))
             .unwrap_or(true)
         {
+            let priority = message
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("priority"))
+                .and_then(|v| match v {
+                    MetadataTypes::String(priority) => Some(priority),
+                    _ => None,
+                })
+                .ok_or_else(|| BroccoliError::Acknowledge("Missing priority".to_string()))?
+                .parse::<i64>()
+                .map_err(|e| {
+                    BroccoliError::Acknowledge(format!("Failed to parse priority: {}", e))
+                })?;
+
             redis_connection
-                .lpush::<String, &str, String>(queue_name.to_string(), &message.task_id)
+                .zadd::<String, i64, &str, String>(
+                    queue_name.to_string(),
+                    &message.task_id.to_string(),
+                    priority * time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64,
+                )
                 .await?;
 
             redis_connection
@@ -346,35 +359,11 @@ impl Broker for RedisBroker {
         let mut redis_connection = get_redis_connection(&redis_pool).await?;
 
         redis_connection
-            .lrem::<&str, &str, String>(queue_name, 1, &message_id)
+            .zrem::<&str, &str, String>(queue_name, &message_id)
             .await?;
 
         redis_connection.del::<&str, String>(&message_id).await?;
 
         Ok(())
-    }
-
-    /// Gets the position of a message in the queue.
-    ///
-    /// # Arguments
-    /// * `queue_name` - The name of the queue.
-    /// * `message_id` - The ID of the message.
-    ///
-    /// # Returns
-    /// A `Result` containing the position of the message in the queue, or `None` if the message is not found.
-    async fn get_message_position(
-        &self,
-        queue_name: &str,
-        message_id: String,
-    ) -> Result<Option<usize>, BroccoliError> {
-        let redis_pool = self.ensure_pool()?;
-
-        let mut redis_connection = get_redis_connection(&redis_pool).await?;
-
-        let position = redis_connection
-            .lpos::<&str, &str, Option<usize>>(queue_name, &message_id, LposOptions::default())
-            .await?;
-
-        Ok(position)
     }
 }

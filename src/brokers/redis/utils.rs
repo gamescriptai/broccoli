@@ -3,11 +3,11 @@
 //! This module provides helper methods for managing Redis message operations,
 //! including message parsing and manipulation of message metadata.
 
-use std::num::NonZero;
+use std::collections::HashMap;
 
 use super::broker::{RedisBroker, RedisConnection, RedisPool};
 use crate::{
-    brokers::broker::{BrokerConfig, InternalBrokerMessage},
+    brokers::broker::{BrokerConfig, InternalBrokerMessage, MetadataTypes},
     error::BroccoliError,
     queue::ConsumeOptions,
 };
@@ -55,78 +55,42 @@ impl RedisBroker {
         redis_connection: &mut RedisConnection<'_>,
         options: Option<ConsumeOptions>,
     ) -> Result<Option<String>, BroccoliError> {
-        let expired_messages: Vec<String> = redis_connection
-            .zrangebyscore(
-                format!("{}_expired_messages", queue_name),
-                0,
-                time::OffsetDateTime::now_utc().unix_timestamp(),
-            )
-            .await?;
+        let popped_message: Option<(String, f64)> = redis_connection
+            .zpopmin::<&str, Vec<(String, f64)>>(queue_name, 1)
+            .await?
+            .first()
+            .cloned();
 
-        if !expired_messages.is_empty() {
-            for expired_message in expired_messages.iter() {
-                let task_id = expired_message.clone();
+        if let Some((message, score)) = &popped_message {
+            if score > &(5.0 * time::OffsetDateTime::now_utc().unix_timestamp_nanos() as f64) {
                 redis_connection
-                    .lrem::<&str, &str, String>(queue_name, 1, &task_id) // Remove from queue
+                    .zadd::<&str, f64, String, ()>(queue_name, message.clone(), *score)
                     .await?;
+                return Ok(None);
             }
-
-            redis_connection
-                .del::<&Vec<String>, String>(&expired_messages)
-                .await?; // Remove message
-
-            redis_connection
-                .zrem::<String, &Vec<String>, String>(
-                    format!("{}_scheduled_messages", queue_name),
-                    &expired_messages,
-                ) // Remove from scheduled
-                .await?;
-
-            redis_connection
-                .zrem::<String, Vec<String>, String>(
-                    format!("{}_expired_messages", queue_name),
-                    expired_messages,
-                ) // Remove from expired
-                .await?;
         }
 
-        let scheduled_messages: Vec<String> = redis_connection
-            .zrangebyscore(
-                format!("{}_scheduled_messages", queue_name),
-                0,
-                time::OffsetDateTime::now_utc().unix_timestamp(),
-            )
-            .await?;
-
-        if !scheduled_messages.is_empty() {
-            let task_id = scheduled_messages[0].clone();
+        if options.is_some_and(|x| x.auto_ack.unwrap_or(false)) {
+            Ok(popped_message.map(|(popped_message, _)| popped_message))
+        } else if let Some((popped_message, _)) = popped_message {
             redis_connection
-                .zrem::<String, &str, String>(
-                    format!("{}_scheduled_messages", queue_name),
-                    &task_id,
-                )
+                .lpush::<String, &String, ()>(format!("{}_processing", queue_name), &popped_message)
                 .await?;
-            Ok(Some(task_id))
-        } else if options.is_some_and(|x| x.auto_ack.unwrap_or(false)) {
-            let popped_messages: Vec<String> =
-                redis_connection.rpop(queue_name, NonZero::new(1)).await?;
-            Ok(popped_messages.first().cloned())
+            Ok(Some(popped_message))
         } else {
-            Ok(redis_connection
-                .lmove(
-                    queue_name,
-                    format!("{}_processing", queue_name),
-                    redis::Direction::Right,
-                    redis::Direction::Left,
-                )
-                .await?)
+            Ok(None)
         }
     }
 }
 
-impl FromRedisValue for InternalBrokerMessage {
+pub struct OptionalInternalBrokerMessage(pub Option<InternalBrokerMessage>);
+
+impl FromRedisValue for OptionalInternalBrokerMessage {
     fn from_redis_value(v: &redis::Value) -> redis::RedisResult<Self> {
         let map: std::collections::HashMap<String, String> = redis::from_redis_value(v)?;
+        if map.is_empty() {
+            return Ok(OptionalInternalBrokerMessage(None));
+        }
 
         let task_id = map.get("task_id").ok_or_else(|| {
             redis::RedisError::from((redis::ErrorKind::TypeError, "Missing field: task_id"))
@@ -140,11 +104,21 @@ impl FromRedisValue for InternalBrokerMessage {
             redis::RedisError::from((redis::ErrorKind::TypeError, "Missing field: attempts"))
         })?;
 
-        Ok(InternalBrokerMessage {
+        let priority = map.get("priority").ok_or_else(|| {
+            redis::RedisError::from((redis::ErrorKind::TypeError, "Missing field: priority"))
+        })?;
+
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            "priority".to_string(),
+            MetadataTypes::String(priority.to_string()),
+        );
+
+        Ok(OptionalInternalBrokerMessage(Some(InternalBrokerMessage {
             task_id: task_id.to_string(),
             payload: payload.to_string(),
             attempts: attempts.parse().unwrap_or_default(),
-            metadata: None,
-        })
+            metadata: Some(metadata),
+        })))
     }
 }

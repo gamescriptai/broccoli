@@ -203,10 +203,12 @@ impl ConsumeOptionsBuilder {
 }
 
 /// Options for publishing messages to the broker.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct PublishOptions {
     /// Time-to-live for the message
     pub ttl: Option<Duration>,
+    /// Message priority level. This is a number between 1 and 5, where 5 is the lowest priority and 1 is the highest.
+    pub priority: Option<u8>,
     #[cfg(any(
         feature = "redis",
         all(feature = "rabbitmq", feature = "rabbitmq-delay")
@@ -232,6 +234,7 @@ impl PublishOptions {
 #[derive(Default, Debug)]
 pub struct PublishOptionsBuilder {
     ttl: Option<Duration>,
+    priority: Option<u8>,
     #[cfg(any(
         feature = "redis",
         all(feature = "rabbitmq", feature = "rabbitmq-delay")
@@ -249,6 +252,7 @@ impl PublishOptionsBuilder {
     pub fn new() -> Self {
         Self {
             ttl: None,
+            priority: None,
             #[cfg(any(
                 feature = "redis",
                 all(feature = "rabbitmq", feature = "rabbitmq-delay")
@@ -288,10 +292,21 @@ impl PublishOptionsBuilder {
         self
     }
 
+    /// Sets the priority level for the message. This is a number between 1 and 5, where 5 is the lowest priority and 1 is the highest.
+    pub fn priority(mut self, priority: u8) -> Self {
+        if !(1..=5).contains(&priority) {
+            panic!("Priority must be between 1 and 5");
+        }
+
+        self.priority = Some(priority);
+        self
+    }
+
     /// Builds the PublishOptions with the configured values.
     pub fn build(self) -> PublishOptions {
         PublishOptions {
             ttl: self.ttl,
+            priority: self.priority,
             #[cfg(any(
                 feature = "redis",
                 all(feature = "rabbitmq", feature = "rabbitmq-delay")
@@ -535,30 +550,6 @@ impl BroccoliQueue {
             .map_err(|e| BroccoliError::Cancel(format!("Failed to cancel message: {:?}", e)))?;
 
         Ok(())
-    }
-
-    /// Gets the position of a message in the queue.
-    ///
-    /// # Arguments
-    /// * `topic` - The name of the topic.
-    /// * `message_id` - The ID of the message.
-    ///
-    /// # Returns
-    /// A `Result` containing the position of the message in the queue, or `None` if the message is not found.
-    pub async fn get_message_position(
-        &self,
-        topic: &str,
-        message_id: String,
-    ) -> Result<Option<usize>, BroccoliError> {
-        self.broker
-            .get_message_position(topic, message_id)
-            .await
-            .map_err(|e| {
-                BroccoliError::GetMessagePosition(format!(
-                    "Failed to get message position: {:?}",
-                    e
-                ))
-            })
     }
 
     /// Processes messages from the specified topic with the provided handler function.

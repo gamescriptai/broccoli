@@ -6,8 +6,8 @@ use deadpool_lapin::{Config, Pool, PoolConfig, Runtime};
 use futures::StreamExt;
 use lapin::{
     options::{
-        BasicAckOptions, BasicCancelOptions, BasicConsumeOptions, BasicGetOptions,
-        BasicPublishOptions, BasicRejectOptions,
+        BasicAckOptions, BasicConsumeOptions, BasicGetOptions, BasicPublishOptions,
+        BasicRejectOptions,
     },
     types::{AMQPValue, FieldTable},
     BasicProperties, Channel,
@@ -17,7 +17,7 @@ use lapin::{
 use time::OffsetDateTime;
 
 use crate::{
-    brokers::broker::{Broker, BrokerConfig, InternalBrokerMessage},
+    brokers::broker::{Broker, BrokerConfig, InternalBrokerMessage, MetadataTypes},
     error::BroccoliError,
     queue::{ConsumeOptions, PublishOptions},
 };
@@ -131,8 +131,9 @@ impl Broker for RabbitMQBroker {
                 "attempts".to_string().into(),
                 AMQPValue::ShortShortUInt(message.attempts),
             );
+            let priority = options.as_ref().and_then(|opts| opts.priority).unwrap_or(5);
 
-            properties = properties.with_headers(table);
+            properties = properties.with_headers(table).with_priority(5 - priority);
 
             channel
                 .basic_publish(
@@ -196,7 +197,7 @@ impl Broker for RabbitMQBroker {
             let mut metadata = HashMap::new();
             metadata.insert(
                 "delivery_tag".to_string(),
-                delivery.delivery_tag.to_string(),
+                MetadataTypes::U64(delivery.delivery_tag),
             );
 
             if !auto_ack {
@@ -270,7 +271,7 @@ impl Broker for RabbitMQBroker {
             let mut metadata = HashMap::new();
             metadata.insert(
                 "delivery_tag".to_string(),
-                delivery.delivery_tag.to_string(),
+                MetadataTypes::U64(delivery.delivery_tag),
             );
             if !auto_ack {
                 self.consume_channels.insert(task_id.clone(), channel);
@@ -296,9 +297,11 @@ impl Broker for RabbitMQBroker {
             .metadata
             .as_ref()
             .and_then(|m| m.get("delivery_tag"))
-            .ok_or_else(|| BroccoliError::Acknowledge("Missing delivery tag".to_string()))?
-            .parse::<u64>()
-            .map_err(|e| BroccoliError::Acknowledge(format!("Invalid delivery tag: {}", e)))?;
+            .and_then(|m| match m {
+                MetadataTypes::U64(v) => Some(*v),
+                _ => None,
+            })
+            .ok_or_else(|| BroccoliError::Acknowledge("Missing delivery tag".to_string()))?;
 
         let channel = {
             let channel = self
@@ -329,9 +332,11 @@ impl Broker for RabbitMQBroker {
             .metadata
             .as_ref()
             .and_then(|m| m.get("delivery_tag"))
-            .ok_or_else(|| BroccoliError::Acknowledge("Missing delivery tag".to_string()))?
-            .parse::<u64>()
-            .map_err(|e| BroccoliError::Acknowledge(format!("Invalid delivery tag: {}", e)))?;
+            .and_then(|m| match m {
+                MetadataTypes::U64(v) => Some(*v),
+                _ => None,
+            })
+            .ok_or_else(|| BroccoliError::Acknowledge("Missing delivery tag".to_string()))?;
 
         let channel = {
             let channel = self
@@ -357,87 +362,7 @@ impl Broker for RabbitMQBroker {
         Ok(())
     }
 
-    async fn cancel(&self, queue_name: &str, message_id: String) -> Result<(), BroccoliError> {
-        let pool = self.ensure_pool().await?;
-        let conn = pool.get().await.map_err(|e| {
-            BroccoliError::Broker(format!("Failed to get connection from pool: {}", e))
-        })?;
-
-        let channel = conn
-            .create_channel()
-            .await
-            .map_err(|e| BroccoliError::Broker(format!("Failed to create channel: {}", e)))?;
-
-        let mut consumer = channel
-            .basic_consume(
-                queue_name,
-                "temp_consumer",
-                BasicConsumeOptions {
-                    no_ack: false,   // Important: manual ack needed
-                    exclusive: true, // Prevent other consumers while we search
-                    ..Default::default()
-                },
-                FieldTable::default(),
-            )
-            .await
-            .map_err(|e| BroccoliError::Consume(format!("Failed to create consumer: {}", e)))?;
-
-        while let Some(delivery) = consumer.next().await {
-            match delivery {
-                Ok(delivery) => {
-                    if let Some(rabbit_message_id) = delivery.properties.message_id() {
-                        if rabbit_message_id.to_string() == message_id {
-                            // Found our message, acknowledge it to remove it
-                            channel
-                                .basic_ack(delivery.delivery_tag, BasicAckOptions::default())
-                                .await
-                                .map_err(|e| {
-                                    BroccoliError::Consume(format!("Failed to ack message: {}", e))
-                                })?;
-
-                            // Cancel the consumer since we're done
-                            channel
-                                .basic_cancel("temp_consumer", BasicCancelOptions::default())
-                                .await
-                                .map_err(|e| {
-                                    BroccoliError::Consume(format!(
-                                        "Failed to cancel consumer: {}",
-                                        e
-                                    ))
-                                })?;
-
-                            return Ok(());
-                        } else {
-                            // Not our message, put it back in the queue
-                            channel
-                                .basic_reject(
-                                    delivery.delivery_tag,
-                                    BasicRejectOptions { requeue: true },
-                                )
-                                .await
-                                .map_err(|e| {
-                                    BroccoliError::Consume(format!(
-                                        "Failed to reject message: {}",
-                                        e
-                                    ))
-                                })?;
-                        }
-                    }
-                }
-                Err(e) => {
-                    return Err(BroccoliError::Consume(format!("Consumer error: {}", e)));
-                }
-            }
-        }
-
-        Ok(()) // Message not found
-    }
-
-    async fn get_message_position(
-        &self,
-        _queue_name: &str,
-        _message_id: String,
-    ) -> Result<Option<usize>, BroccoliError> {
+    async fn cancel(&self, _queue_name: &str, _message_id: String) -> Result<(), BroccoliError> {
         Err(BroccoliError::NotImplemented)
     }
 }

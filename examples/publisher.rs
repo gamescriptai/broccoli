@@ -75,6 +75,7 @@ async fn main() -> Result<(), BroccoliError> {
                 ))]
                 scheduled_at: None,
                 ttl: None,
+                priority: None,
             }),
         )
         .await?;

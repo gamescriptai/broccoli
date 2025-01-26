@@ -79,6 +79,8 @@ impl RabbitMQBroker {
             );
         }
 
+        args.insert("x-max-priority".into(), AMQPValue::LongInt(5));
+
         let queue = channel
             .queue_declare(
                 queue_name,

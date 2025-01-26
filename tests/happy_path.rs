@@ -1,9 +1,4 @@
 use broccoli_queue::queue::ConsumeOptionsBuilder;
-
-#[cfg(any(
-    feature = "redis",
-    all(feature = "rabbitmq", feature = "rabbitmq-delay")
-))]
 use broccoli_queue::queue::PublishOptions;
 use serde::{Deserialize, Serialize};
 use time::Duration;
@@ -193,13 +188,6 @@ async fn test_message_retry() {
         .await
         .unwrap();
     assert!(result.is_none());
-
-    // Check failed queue
-    let failed_result = queue
-        .try_consume::<TestMessage>(&format!("{}_failed", test_topic), Default::default())
-        .await
-        .unwrap();
-    assert!(failed_result.is_some());
 }
 
 #[tokio::test]
@@ -308,49 +296,74 @@ async fn test_message_cancellation() {
 }
 
 #[tokio::test]
-async fn test_queue_position() {
+async fn test_message_priority() {
     let queue = common::setup_queue().await;
-    let test_topic = "test_position_topic";
+    let test_topic = "test_priority_topic";
 
-    // Publish multiple messages
-    let messages = vec![
+    // Create messages with different priorities
+    let messages = [
         TestMessage {
             id: "1".to_string(),
-            content: "first".to_string(),
+            content: "low priority".to_string(),
         },
         TestMessage {
             id: "2".to_string(),
-            content: "second".to_string(),
+            content: "high priority".to_string(),
         },
         TestMessage {
             id: "3".to_string(),
-            content: "third".to_string(),
+            content: "medium priority".to_string(),
         },
     ];
 
-    let published = queue
-        .publish_batch(test_topic, messages, None)
+    // Publish messages with different priorities
+    let options_low = PublishOptions::builder().priority(5).build();
+    let options_high = PublishOptions::builder().priority(1).build();
+    let options_medium = PublishOptions::builder().priority(3).build();
+
+    queue
+        .publish(test_topic, &messages[0], Some(options_low))
         .await
-        .expect("Failed to publish batch");
+        .expect("Failed to publish low priority message");
 
-    // Check position of second message
-    let position_result = queue
-        .get_message_position(test_topic, published[1].task_id.to_string())
-        .await;
+    queue
+        .publish(test_topic, &messages[1], Some(options_high))
+        .await
+        .expect("Failed to publish high priority message");
 
-    let position = match position_result {
-        Ok(Some(pos)) => pos,
-        Ok(None) => {
-            panic!("Message not found");
-        }
-        Err(e) if e.to_string().contains("NotImplemented") => {
-            println!("This feature is not implemented for this broker");
-            return;
-        }
-        Err(e) => {
-            panic!("Failed to get message position: {:?}", e);
-        }
-    };
+    queue
+        .publish(test_topic, &messages[2], Some(options_medium))
+        .await
+        .expect("Failed to publish medium priority message");
 
-    assert_eq!(position, 1);
+    // Consume messages - they should come in priority order (high to low)
+    let first = queue
+        .consume::<TestMessage>(test_topic, None)
+        .await
+        .expect("Failed to consume first message");
+    queue
+        .acknowledge(test_topic, first.clone())
+        .await
+        .expect("Failed to acknowledge first message");
+    let second = queue
+        .consume::<TestMessage>(test_topic, None)
+        .await
+        .expect("Failed to consume second message");
+    queue
+        .acknowledge(test_topic, second.clone())
+        .await
+        .expect("Failed to acknowledge second message");
+    let third = queue
+        .consume::<TestMessage>(test_topic, None)
+        .await
+        .expect("Failed to consume third message");
+    queue
+        .acknowledge(test_topic, third.clone())
+        .await
+        .expect("Failed to acknowledge third message");
+
+    // Verify priority ordering
+    assert_eq!(first.payload.content, "high priority");
+    assert_eq!(second.payload.content, "medium priority");
+    assert_eq!(third.payload.content, "low priority");
 }

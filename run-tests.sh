@@ -1,57 +1,52 @@
 #!/bin/bash
 
-# Start Redis server using Docker
-echo "Starting Redis server using Docker..."
-docker run --name test-redis -d -p 6380:6379 redis > /dev/null
+# Trap for cleanup
+cleanup() {
+    echo "Cleaning up containers..."
+    docker stop test-redis test-rabbit-mq >/dev/null 2>&1
+    docker rm test-redis test-rabbit-mq >/dev/null 2>&1
+}
+trap cleanup EXIT
 
-# Wait for Redis server to start
-sleep 2
+run_redis_test() {
+    echo "Starting Redis test..."
+    docker run --name test-redis -d -p 6380:6379 redis >/dev/null
+    sleep 2
+    BROCCOLI_QUEUE_URL=redis://localhost:6380 cargo test --features redis
+}
 
+run_rabbitmq_delay_test() {
+    echo "Starting RabbitMQ test with delay plugin..."
+    docker build -f Dockerfile.rabbitmq -t rabbitmq-with-delays .
+    docker run --name test-rabbit-mq -d -p 5672:5672 -p 15672:15672 rabbitmq-with-delays >/dev/null
+    sleep 5
+    BROCCOLI_QUEUE_URL=amqp://localhost:5672 cargo test --features rabbitmq,rabbitmq-delay
+}
 
-# Run cargo tests
-echo "Running cargo tests..."
-BROCCOLI_QUEUE_URL=redis://localhost:6380 cargo test --features redis
+run_rabbitmq_test() {
+    echo "Starting RabbitMQ test..."
+    docker run --name test-rabbit-mq -d -p 5672:5672 -p 15672:15672 rabbitmq:management >/dev/null
+    sleep 5
+    BROCCOLI_QUEUE_URL=amqp://localhost:5672 cargo test --features rabbitmq 
+}
 
-# Stop and remove Redis container
-echo "Stopping Redis server..."
-docker stop test-redis > /dev/null
-docker rm test-redis > /dev/null
+run_redis_bench() {
+    echo "Starting Redis benchmark test..."
+    docker run --name test-redis -d -p 6380:6379 redis >/dev/null
+    sleep 2
+    BROCCOLI_QUEUE_URL=redis://localhost:6380 cargo bench --features redis
+}
 
-# Build the custom image
-echo "Building custom RabbitMQ image with plugins..."
-docker build -f Dockerfile.rabbitmq -t rabbitmq-with-delays .
-
-# Run the container with the custom image
-echo "Starting RabbitMQ server with delayed message exchange plugin using Docker..."
-docker run --name test-rabbit-mq -d -p 5672:5672 -p 15672:15672 rabbitmq-with-delays > /dev/null
-
-# Wait for RabbitMQ server to start and plugin to be enabled
-echo "Waiting for RabbitMQ to start..."
-sleep 5
-
-# Run cargo tests
-echo "Running cargo tests..."
-BROCCOLI_QUEUE_URL=amqp://localhost:5672 cargo test --features rabbitmq,rabbitmq-delay
-
-# Stop and remove RabbitMQ container
-echo "Cleaning up..."
-docker stop test-rabbit-mq > /dev/null
-docker rm test-rabbit-mq > /dev/null
-
-
-# Run the container with the custom image
-echo "Starting RabbitMQ server without the plugins..."
-docker run --name test-rabbit-mq -d -p 5672:5672 -p 15672:15672 rabbitmq > /dev/null
-
-# Wait for RabbitMQ server to start and plugin to be enabled
-echo "Waiting for RabbitMQ to start..."
-sleep 5
-
-# Run cargo tests
-echo "Running cargo tests..."
-BROCCOLI_QUEUE_URL=amqp://localhost:5672 cargo test --features rabbitmq
-
-# Stop and remove RabbitMQ container
-echo "Cleaning up..."
-docker stop test-rabbit-mq > /dev/null
-docker rm test-rabbit-mq > /dev/null
+case "$1" in
+    "redis") run_redis_test ;;
+    "rabbitmq") run_rabbitmq_test ;;
+    "rabbitmq-delay") run_rabbitmq_delay_test ;;
+    "redis-bench") run_redis_bench ;;
+    *)
+        run_redis_test
+        cleanup
+        run_rabbitmq_delay_test
+        cleanup
+        run_rabbitmq_test
+        ;;
+esac

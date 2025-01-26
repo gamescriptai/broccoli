@@ -96,20 +96,6 @@ pub trait Broker: Send + Sync {
     /// # Returns
     /// A `Result` indicating success or failure.
     async fn cancel(&self, queue_name: &str, message_id: String) -> Result<(), BroccoliError>;
-
-    /// Gets the position of a message in the queue.
-    ///
-    /// # Arguments
-    /// * `queue_name` - The name of the queue.
-    /// * `message_id` - The ID of the message.
-    ///
-    /// # Returns
-    /// A `Result` containing the position of the message in the queue, or `None` if the message is not found.
-    async fn get_message_position(
-        &self,
-        queue_name: &str,
-        message_id: String,
-    ) -> Result<Option<usize>, BroccoliError>;
 }
 
 /// Configuration options for broker behavior.
@@ -146,7 +132,7 @@ pub struct BrokerMessage<T: Clone + serde::Serialize> {
     pub attempts: u8,
     /// Additional metadata for the message
     #[serde(skip)]
-    pub metadata: Option<HashMap<String, String>>,
+    pub(crate) metadata: Option<HashMap<String, MetadataTypes>>,
 }
 
 impl<T: Clone + serde::Serialize> BrokerMessage<T> {
@@ -171,6 +157,12 @@ impl<T: Clone + serde::Serialize> BrokerMessage<T> {
     }
 }
 
+#[derive(Debug, Clone)]
+pub(crate) enum MetadataTypes {
+    String(String),
+    U64(u64),
+}
+
 /// A message with metadata for internal broker operations.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct InternalBrokerMessage {
@@ -182,22 +174,17 @@ pub struct InternalBrokerMessage {
     pub attempts: u8,
     /// Additional metadata for the message
     #[serde(skip)]
-    pub metadata: Option<HashMap<String, String>>,
+    pub(crate) metadata: Option<HashMap<String, MetadataTypes>>,
 }
 
 impl InternalBrokerMessage {
     /// Creates a new `InternalBrokerMessage` with the provided metadata.
-    pub fn new(
-        task_id: String,
-        payload: String,
-        attempts: u8,
-        metadata: Option<HashMap<String, String>>,
-    ) -> Self {
+    pub fn new(task_id: String, payload: String, attempts: u8) -> Self {
         InternalBrokerMessage {
             task_id,
             payload,
             attempts,
-            metadata,
+            metadata: None,
         }
     }
 }
