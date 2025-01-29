@@ -49,7 +49,6 @@ jobs:
 
       - name: Run RabbitMQ tests with delay plugin
         run: |
-          docker stop ${{ job.services.rabbitmq.id }}
           docker build -f Dockerfile.rabbitmq -t rabbitmq-with-delays .
           docker run -d --name rabbitmq-delay -p 5672:5672 -p 15672:15672 rabbitmq-with-delays
           sleep 15 # Wait for RabbitMQ to start
