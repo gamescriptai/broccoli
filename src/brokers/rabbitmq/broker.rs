@@ -13,7 +13,6 @@ use lapin::{
     BasicProperties, Channel,
 };
 
-#[cfg(feature = "rabbitmq-delay")]
 use time::OffsetDateTime;
 
 use crate::{
@@ -108,22 +107,34 @@ impl Broker for RabbitMQBroker {
                     properties = properties.with_expiration(ttl.whole_seconds().to_string().into());
                 }
 
-                #[cfg(feature = "rabbitmq-delay")]
                 if let Some(delay) = opts.delay {
-                    table.insert(
-                        "x-delay".to_string().into(),
-                        AMQPValue::LongLongInt(delay.whole_milliseconds() as i64),
-                    );
+                    if self
+                        .config
+                        .as_ref()
+                        .map(|c| c.enable_scheduling.unwrap_or(false))
+                        .unwrap_or(false)
+                    {
+                        table.insert(
+                            "x-delay".to_string().into(),
+                            AMQPValue::LongLongInt(delay.whole_milliseconds() as i64),
+                        );
+                    }
                 }
 
-                #[cfg(feature = "rabbitmq-delay")]
                 if let Some(schedule) = opts.scheduled_at {
-                    table.insert(
-                        "x-delay".to_string().into(),
-                        AMQPValue::LongLongInt(
-                            (schedule - OffsetDateTime::now_utc()).whole_milliseconds() as i64,
-                        ),
-                    );
+                    if self
+                        .config
+                        .as_ref()
+                        .map(|c| c.enable_scheduling.unwrap_or(false))
+                        .unwrap_or(false)
+                    {
+                        table.insert(
+                            "x-delay".to_string().into(),
+                            AMQPValue::LongLongInt(
+                                (schedule - OffsetDateTime::now_utc()).whole_milliseconds() as i64,
+                            ),
+                        );
+                    }
                 }
             }
 

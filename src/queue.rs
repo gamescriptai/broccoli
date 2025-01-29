@@ -3,10 +3,6 @@ use std::{future::Future, sync::Arc, time::Instant};
 use futures::stream::FuturesUnordered;
 use time::Duration;
 
-#[cfg(any(
-    feature = "redis",
-    all(feature = "rabbitmq", feature = "rabbitmq-delay")
-))]
 use time::OffsetDateTime;
 
 use crate::{
@@ -89,6 +85,11 @@ pub struct BroccoliQueueBuilder {
     retry_failed: Option<bool>,
     /// Number of connections to maintain in the connection pool
     pool_connections: Option<u8>,
+    /// Whether to enable message scheduling
+    ///
+    /// NOTE: If you enable this w/ rabbitmq, you will need to install the delayed-exchange plugin
+    /// https://www.rabbitmq.com/blog/2015/04/16/scheduling-messages-with-rabbitmq
+    enable_scheduling: Option<bool>,
 }
 
 impl BroccoliQueueBuilder {
@@ -105,6 +106,7 @@ impl BroccoliQueueBuilder {
             retry_attempts: None,
             retry_failed: None,
             pool_connections: None,
+            enable_scheduling: None,
         }
     }
 
@@ -133,6 +135,21 @@ impl BroccoliQueueBuilder {
         self
     }
 
+    /// Enables or disables message scheduling.
+    ///
+    /// NOTE: If you enable this w/ rabbitmq, you will need to install the delayed-exchange plugin
+    /// https://www.rabbitmq.com/blog/2015/04/16/scheduling-messages-with-rabbitmq
+    ///
+    /// # Arguments
+    /// * `enable_scheduling` - If true, message scheduling will be enabled.
+    ///
+    /// # Returns
+    /// The updated `BroccoliQueueBuilder` instance.
+    pub fn enable_scheduling(mut self, enable_scheduling: bool) -> Self {
+        self.enable_scheduling = Some(enable_scheduling);
+        self
+    }
+
     /// Builds the `BroccoliQueue` with the specified configuration.
     ///
     /// # Returns
@@ -142,6 +159,7 @@ impl BroccoliQueueBuilder {
             retry_attempts: self.retry_attempts,
             retry_failed: self.retry_failed,
             pool_connections: self.pool_connections,
+            enable_scheduling: self.enable_scheduling,
         };
 
         let broker = connect_to_broker(&self.broker_url, Some(config))
@@ -209,16 +227,8 @@ pub struct PublishOptions {
     pub ttl: Option<Duration>,
     /// Message priority level. This is a number between 1 and 5, where 5 is the lowest priority and 1 is the highest.
     pub priority: Option<u8>,
-    #[cfg(any(
-        feature = "redis",
-        all(feature = "rabbitmq", feature = "rabbitmq-delay")
-    ))]
     /// Delay before the message is published
     pub delay: Option<Duration>,
-    #[cfg(any(
-        feature = "redis",
-        all(feature = "rabbitmq", feature = "rabbitmq-delay")
-    ))]
     /// Scheduled time for the message to be published
     pub scheduled_at: Option<OffsetDateTime>,
 }
@@ -235,15 +245,7 @@ impl PublishOptions {
 pub struct PublishOptionsBuilder {
     ttl: Option<Duration>,
     priority: Option<u8>,
-    #[cfg(any(
-        feature = "redis",
-        all(feature = "rabbitmq", feature = "rabbitmq-delay")
-    ))]
     delay: Option<Duration>,
-    #[cfg(any(
-        feature = "redis",
-        all(feature = "rabbitmq", feature = "rabbitmq-delay")
-    ))]
     scheduled_at: Option<OffsetDateTime>,
 }
 
@@ -253,15 +255,7 @@ impl PublishOptionsBuilder {
         Self {
             ttl: None,
             priority: None,
-            #[cfg(any(
-                feature = "redis",
-                all(feature = "rabbitmq", feature = "rabbitmq-delay")
-            ))]
             delay: None,
-            #[cfg(any(
-                feature = "redis",
-                all(feature = "rabbitmq", feature = "rabbitmq-delay")
-            ))]
             scheduled_at: None,
         }
     }
@@ -273,20 +267,12 @@ impl PublishOptionsBuilder {
     }
 
     /// Sets a delay before the message is published.
-    #[cfg(any(
-        feature = "redis",
-        all(feature = "rabbitmq", feature = "rabbitmq-delay")
-    ))]
     pub fn delay(mut self, duration: Duration) -> Self {
         self.delay = Some(duration);
         self
     }
 
     /// Sets a specific time for the message to be published.
-    #[cfg(any(
-        feature = "redis",
-        all(feature = "rabbitmq", feature = "rabbitmq-delay")
-    ))]
     pub fn schedule_at(mut self, time: OffsetDateTime) -> Self {
         self.scheduled_at = Some(time);
         self
@@ -307,15 +293,7 @@ impl PublishOptionsBuilder {
         PublishOptions {
             ttl: self.ttl,
             priority: self.priority,
-            #[cfg(any(
-                feature = "redis",
-                all(feature = "rabbitmq", feature = "rabbitmq-delay")
-            ))]
             delay: self.delay,
-            #[cfg(any(
-                feature = "redis",
-                all(feature = "rabbitmq", feature = "rabbitmq-delay")
-            ))]
             scheduled_at: self.scheduled_at,
         }
     }

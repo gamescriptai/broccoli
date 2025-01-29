@@ -30,6 +30,7 @@ async fn main() -> Result<(), BroccoliError> {
     let queue = BroccoliQueue::builder(queue_url)
         .failed_message_retry_strategy(Default::default())
         .pool_connections(5)
+        .enable_scheduling(true)
         .build()
         .await?;
 
@@ -64,15 +65,7 @@ async fn main() -> Result<(), BroccoliError> {
             "jobs",
             scheduled_jobs,
             Some(PublishOptions {
-                #[cfg(any(
-                    feature = "redis",
-                    all(feature = "rabbitmq", feature = "rabbitmq-delay")
-                ))]
                 delay: Some(Duration::seconds(10)),
-                #[cfg(any(
-                    feature = "redis",
-                    all(feature = "rabbitmq", feature = "rabbitmq-delay")
-                ))]
                 scheduled_at: None,
                 ttl: None,
                 priority: None,

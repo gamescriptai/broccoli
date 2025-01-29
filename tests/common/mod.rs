@@ -4,6 +4,7 @@ pub async fn setup_queue() -> BroccoliQueue {
     let queue_url = std::env::var("BROCCOLI_QUEUE_URL").unwrap();
     BroccoliQueue::builder(queue_url)
         .pool_connections(5)
+        .enable_scheduling(true)
         .build()
         .await
         .expect("Queue setup failed. Are you sure Redis/RabbitMQ is running?")

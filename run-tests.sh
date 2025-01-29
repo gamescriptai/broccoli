@@ -15,20 +15,14 @@ run_redis_test() {
     BROCCOLI_QUEUE_URL=redis://localhost:6380 cargo test --features redis
 }
 
-run_rabbitmq_delay_test() {
+run_rabbitmq_test() {
     echo "Starting RabbitMQ test with delay plugin..."
     docker build -f Dockerfile.rabbitmq -t rabbitmq-with-delays .
     docker run --name test-rabbit-mq -d -p 5672:5672 -p 15672:15672 rabbitmq-with-delays >/dev/null
     sleep 5
-    BROCCOLI_QUEUE_URL=amqp://localhost:5672 cargo test --features rabbitmq,rabbitmq-delay
+    BROCCOLI_QUEUE_URL=amqp://localhost:5672 cargo test --features rabbitmq
 }
 
-run_rabbitmq_test() {
-    echo "Starting RabbitMQ test..."
-    docker run --name test-rabbit-mq -d -p 5672:5672 -p 15672:15672 rabbitmq:management >/dev/null
-    sleep 5
-    BROCCOLI_QUEUE_URL=amqp://localhost:5672 cargo test --features rabbitmq 
-}
 
 run_redis_bench() {
     echo "Starting Redis benchmark test..."
@@ -40,12 +34,9 @@ run_redis_bench() {
 case "$1" in
     "redis") run_redis_test ;;
     "rabbitmq") run_rabbitmq_test ;;
-    "rabbitmq-delay") run_rabbitmq_delay_test ;;
     "redis-bench") run_redis_bench ;;
     *)
         run_redis_test
-        cleanup
-        run_rabbitmq_delay_test
         cleanup
         run_rabbitmq_test
         ;;

@@ -73,7 +73,6 @@ async fn test_batch_publish_and_consume() {
 }
 
 #[tokio::test]
-#[cfg(any(feature = "redis", feature = "rabbitmq-delay"))]
 async fn test_delayed_message() {
     let queue = common::setup_queue().await;
     let test_topic = "test_delayed_topic";
@@ -113,7 +112,6 @@ async fn test_delayed_message() {
 }
 
 #[tokio::test]
-#[cfg(any(feature = "redis", feature = "rabbitmq-delay"))]
 async fn test_scheduled_message() {
     let queue = common::setup_queue().await;
     let test_topic = "test_scheduled_topic";

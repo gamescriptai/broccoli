@@ -141,11 +141,25 @@ impl Broker for RedisBroker {
 
             if let Some(ref publish_options) = publish_options {
                 if let Some(delay) = publish_options.delay {
-                    score += (delay.as_seconds_f32() * 1_000_000_000.0) as i64;
+                    if self
+                        .config
+                        .as_ref()
+                        .map(|c| c.enable_scheduling.unwrap_or(false))
+                        .unwrap_or(false)
+                    {
+                        score += (delay.as_seconds_f32() * 1_000_000_000.0) as i64;
+                    }
                 }
 
                 if let Some(timestamp) = publish_options.scheduled_at {
-                    score = timestamp.unix_timestamp_nanos() as i64;
+                    if self
+                        .config
+                        .as_ref()
+                        .map(|c| c.enable_scheduling.unwrap_or(false))
+                        .unwrap_or(false)
+                    {
+                        score = timestamp.unix_timestamp_nanos() as i64;
+                    }
                 }
 
                 if let Some(ttl) = publish_options.ttl {

@@ -40,19 +40,25 @@ impl RabbitMQBroker {
     ) -> Result<(), BroccoliError> {
         #[allow(unused_mut)]
         let mut args = FieldTable::default();
-        #[cfg(feature = "rabbitmq-delay")]
-        args.insert(
-            "x-delayed-type".into(),
-            AMQPValue::LongString("direct".into()),
-        );
+        let exchange_kind = if self
+            .config
+            .as_ref()
+            .map(|c| c.enable_scheduling.unwrap_or(false))
+            .unwrap_or(false)
+        {
+            args.insert(
+                "x-delayed-type".into(),
+                AMQPValue::LongString("direct".into()),
+            );
+            lapin::ExchangeKind::Custom("x-delayed-message".into())
+        } else {
+            lapin::ExchangeKind::Direct
+        };
 
         channel
             .exchange_declare(
                 exchange_name,
-                #[cfg(feature = "rabbitmq-delay")]
-                lapin::ExchangeKind::Custom("x-delayed-message".into()),
-                #[cfg(not(feature = "rabbitmq-delay"))]
-                lapin::ExchangeKind::Direct,
+                exchange_kind,
                 lapin::options::ExchangeDeclareOptions::default(),
                 args.clone(),
             )

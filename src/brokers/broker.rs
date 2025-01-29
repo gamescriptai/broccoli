@@ -106,6 +106,11 @@ pub struct BrokerConfig {
     pub retry_failed: Option<bool>,
     /// Number of connections to maintain in the connection pool
     pub pool_connections: Option<u8>,
+    /// Whether to enable scheduling for messages
+    ///
+    /// NOTE: If you enable this w/ rabbitmq, you will need to install the delayed-exchange plugin
+    /// https://www.rabbitmq.com/blog/2015/04/16/scheduling-messages-with-rabbitmq
+    pub enable_scheduling: Option<bool>,
 }
 
 impl Default for BrokerConfig {
@@ -114,6 +119,7 @@ impl Default for BrokerConfig {
             retry_attempts: Some(3),
             retry_failed: Some(true),
             pool_connections: Some(10),
+            enable_scheduling: Some(false),
         }
     }
 }

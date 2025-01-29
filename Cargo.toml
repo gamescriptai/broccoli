@@ -41,7 +41,6 @@ criterion = { version = "0.5", features = ["async_tokio"] }
 default = []
 redis = ["dep:bb8-redis", "dep:redis"]
 rabbitmq = ["dep:lapin", "dep:deadpool", "dep:deadpool-lapin"]
-rabbitmq-delay = []
 
 [[bench]]
 name = "queue_benchmark"

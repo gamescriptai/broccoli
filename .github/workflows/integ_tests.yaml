@@ -19,11 +19,6 @@ jobs:
         image: redis
         ports:
           - 6379:6379
-      rabbitmq:
-        image: rabbitmq:management
-        ports:
-          - 5672:5672
-          - 15672:15672
 
     steps:
       - uses: actions/checkout@v4
@@ -51,11 +46,6 @@ jobs:
         run: cargo test --features redis
         env:
           BROCCOLI_QUEUE_URL: redis://localhost:6379
-
-      - name: Run RabbitMQ tests
-        run: cargo test --features rabbitmq
-        env:
-          BROCCOLI_QUEUE_URL: amqp://localhost:5672
 
       - name: Run RabbitMQ tests with delay plugin
         run: |

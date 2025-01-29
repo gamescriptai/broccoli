@@ -129,7 +129,6 @@ async fn test_zero_ttl() {
 }
 
 #[tokio::test]
-#[cfg(any(feature = "redis", feature = "rabbitmq-delay"))]
 async fn test_message_ordering() {
     let queue = common::setup_queue().await;
     let test_topic = "test_ordering_topic";
