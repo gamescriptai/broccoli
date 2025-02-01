@@ -5,20 +5,20 @@
 
 use std::collections::HashMap;
 
-use super::broker::{RedisBroker, RedisConnection, RedisPool};
+use super::broker::{RedisBroker, RedisPool};
 use crate::{
     brokers::broker::{BrokerConfig, InternalBrokerMessage, MetadataTypes},
     error::BroccoliError,
     queue::ConsumeOptions,
 };
-use redis::{AsyncCommands, FromRedisValue};
+use redis::{aio::MultiplexedConnection, FromRedisValue};
 
 impl RedisBroker {
     /// Creates a new `RedisBroker` instance with default configuration.
     pub fn new() -> Self {
         RedisBroker {
             redis_pool: None,
-            connected: false,
+            broker_url: String::new(),
             config: None,
         }
     }
@@ -30,19 +30,19 @@ impl RedisBroker {
     pub fn new_with_config(config: BrokerConfig) -> Self {
         RedisBroker {
             redis_pool: None,
-            connected: false,
+            broker_url: String::new(),
             config: Some(config),
         }
     }
 
     pub(crate) fn ensure_pool(&self) -> Result<RedisPool, BroccoliError> {
-        if !self.connected {
-            return Err(BroccoliError::Broker(
-                "Redis broker not connected".to_string(),
-            ));
-        }
         match &self.redis_pool {
-            Some(pool) => Ok(pool.clone()),
+            Some(pool) => Ok(pool
+                .try_read()
+                .map_err(|_| {
+                    BroccoliError::Broker("Failed to acquire read lock on redis pool".to_string())
+                })?
+                .clone()),
             None => Err(BroccoliError::Broker(
                 "Redis pool not initialized".to_string(),
             )),
@@ -52,87 +52,184 @@ impl RedisBroker {
     pub(crate) async fn get_task_id(
         &self,
         queue_name: &str,
-        redis_connection: &mut RedisConnection<'_>,
+        redis_connection: &mut MultiplexedConnection,
         options: Option<ConsumeOptions>,
     ) -> Result<Option<String>, BroccoliError> {
-        let popped_message: Option<(String, String)> = if self
+        let popped_message: Option<String> = if self
             .config
             .as_ref()
             .is_some_and(|x| x.enable_fairness.unwrap_or(false))
         {
             let script = redis::Script::new(
                 r#"
-            local current_time = tonumber(ARGV[1])
-            local queue_to_process = redis.call('LPOP', KEYS[1])
-            if not queue_to_process then
-            return nil
-            end
+                local current_time = tonumber(ARGV[1])
+                local queue_to_process = redis.call('LPOP', KEYS[1])
+                if not queue_to_process then
+                return nil
+                end
 
-            local popped_message = redis.call('ZPOPMIN', string.format("%s_%s_queue", KEYS[2], queue_to_process), 1)
-            if #popped_message == 0 then
-            return nil
-            end
+                local popped_message = redis.call('ZPOPMIN', string.format("%s_%s_queue", KEYS[2], queue_to_process), 1)
+                if #popped_message == 0 then
+                return nil
+                end
 
-            local message = popped_message[1]
-            local score = tonumber(popped_message[2])
+                local message = popped_message[1]
+                local score = tonumber(popped_message[2])
 
-            if score > (5.0 * current_time) then
-            redis.call('ZADD', string.format("%s_%s_queue", KEYS[2], queue_to_process), score, message)
-            redis.call('RPUSH', KEYS[1], queue_to_process)
-            return nil
-            end
+                if score > (5.0 * current_time) then
+                redis.call('ZADD', string.format("%s_%s_queue", KEYS[2], queue_to_process), score, message)
+                redis.call('RPUSH', KEYS[1], queue_to_process)
+                return nil
+                end
 
-            local does_subqueue_exist = redis.call('EXISTS', string.format("%s_%s_queue", KEYS[2], queue_to_process)) == 1
-            if does_subqueue_exist then
-            redis.call('RPUSH', KEYS[1], queue_to_process)
-            else
-            redis.call('SREM', KEYS[3], queue_to_process)
-            end
+                local does_subqueue_exist = redis.call('EXISTS', string.format("%s_%s_queue", KEYS[2], queue_to_process)) == 1
+                if does_subqueue_exist then
+                redis.call('RPUSH', KEYS[1], queue_to_process)
+                else
+                redis.call('SREM', KEYS[3], queue_to_process)
+                end
 
-            return {message, queue_to_process}
-        "#,
+                if ARGV[2] then
+                    local processing_queue_name = string.format("%s_%s_processing", KEYS[2], queue_to_process)
+                    redis.call('LPUSH', processing_queue_name, message)
+                end
+
+                return message
+            "#,
             );
 
             script
                 .arg(time::OffsetDateTime::now_utc().unix_timestamp_nanos() as f64)
+                .arg(
+                    options
+                        .map(|x| x.auto_ack.unwrap_or(false))
+                        .unwrap_or(false),
+                )
                 .key(format!("{}_fairness_round_robin", queue_name))
                 .key(queue_name)
                 .key(format!("{}_fairness_set", queue_name))
-                .invoke_async(&mut **redis_connection)
+                .invoke_async(redis_connection)
                 .await?
         } else {
-            let popped_message: Option<(String, f64)> = redis_connection
-                .zpopmin::<&str, Vec<(String, f64)>>(queue_name, 1)
-                .await?
-                .first()
-                .cloned();
+            let script = redis::Script::new(
+                r#"
+                local current_time = tonumber(ARGV[1])
+                local popped_message = redis.call('ZPOPMIN', KEYS[1], 1)
+                if #popped_message == 0 then
+                return nil
+                end
 
-            if let Some((message, score)) = &popped_message {
-                if score > &(5.0 * time::OffsetDateTime::now_utc().unix_timestamp_nanos() as f64) {
-                    redis_connection
-                        .zadd::<&str, f64, String, ()>(queue_name, message.clone(), *score)
-                        .await?;
-                    return Ok(None);
-                }
-            }
-            (popped_message).map(|(popped_message, _)| (popped_message, String::new()))
+                local message = popped_message[1]
+                local score = tonumber(popped_message[2])
+
+                if score > (5.0 * current_time) then
+                redis.call('ZADD', KEYS[1], score, message)
+                return nil
+                end
+
+                redis.log(redis.LOG_NOTICE, ARGV[2])
+                
+                if ARGV[2] then
+                    redis.call('LPUSH', KEYS[2], message)
+                end
+                return message
+            "#,
+            );
+
+            script
+                .arg(time::OffsetDateTime::now_utc().unix_timestamp_nanos() as f64)
+                .arg(
+                    options
+                        .map(|x| x.auto_ack.unwrap_or(false))
+                        .unwrap_or(false),
+                )
+                .key(queue_name)
+                .key(format!("{}_processing", queue_name))
+                .invoke_async(redis_connection)
+                .await?
         };
 
-        if options.is_some_and(|x| x.auto_ack.unwrap_or(false)) {
-            Ok(popped_message.map(|(popped_message, _)| popped_message))
-        } else if let Some((popped_message, disambiguator)) = popped_message {
-            let processing_queue_name = if !disambiguator.is_empty() {
-                format!("{}_{}_processing", queue_name, disambiguator)
-            } else {
-                format!("{}_processing", queue_name)
+        Ok(popped_message)
+    }
+
+    /// Retrieves a Redis connection from the pool, retrying with exponential backoff if necessary.
+    ///
+    /// # Arguments
+    /// * `redis_pool` - A reference to the Redis connection pool.
+    ///
+    /// # Returns
+    /// A `Result` containing a `RedisConnection` on success, or a `BroccoliError` on failure.
+    pub(crate) async fn get_redis_connection(
+        &self,
+    ) -> Result<MultiplexedConnection, BroccoliError> {
+        let mut redis_conn_sleep = std::time::Duration::from_secs(1);
+
+        let redis_pool = self.ensure_pool()?;
+
+        #[allow(unused_assignments)]
+        let mut opt_redis_connection = None;
+
+        loop {
+            let borrowed_redis_connection = match redis_pool.get().await {
+                Ok(redis_connection) => Some(redis_connection),
+                Err(err) => {
+                    let redis_manager = bb8_redis::RedisConnectionManager::new(
+                        self.broker_url.clone(),
+                    )
+                    .map_err(|e| {
+                        BroccoliError::Broker(format!("Failed to create redis manager: {:?}", e))
+                    })?;
+
+                    let redis_pool = bb8_redis::bb8::Pool::builder()
+                        .max_size(
+                            self.config
+                                .as_ref()
+                                .map(|config| config.pool_connections.unwrap_or(10))
+                                .unwrap_or(10)
+                                .into(),
+                        )
+                        .connection_timeout(std::time::Duration::from_secs(2))
+                        .build(redis_manager)
+                        .await
+                        .map_err(|e| {
+                            BroccoliError::Broker(format!("Failed to create redis pool: {:?}", e))
+                        })?;
+
+                    {
+                        let mut pool_write = self
+                            .redis_pool
+                            .as_ref()
+                            .ok_or_else(|| {
+                                BroccoliError::Broker("Redis pool not initialized".to_string())
+                            })?
+                            .write()
+                            .map_err(|_| {
+                                BroccoliError::Broker(
+                                    "Failed to acquire write lock on redis pool".to_string(),
+                                )
+                            })?;
+                        *pool_write = redis_pool;
+                    }
+                    BroccoliError::Broker(format!("Failed to get redis connection: {:?}", err));
+                    None
+                }
             };
-            redis_connection
-                .lpush::<String, &String, ()>(processing_queue_name, &popped_message)
-                .await?;
-            Ok(Some(popped_message))
-        } else {
-            Ok(None)
+
+            if borrowed_redis_connection.is_some() {
+                opt_redis_connection = borrowed_redis_connection;
+                break;
+            }
+
+            tokio::time::sleep(redis_conn_sleep).await;
+            redis_conn_sleep =
+                std::cmp::min(redis_conn_sleep * 2, std::time::Duration::from_secs(300));
         }
+
+        let redis_connection = opt_redis_connection.ok_or(BroccoliError::Broker(
+            "Failed to get redis connection".to_string(),
+        ))?;
+
+        Ok(redis_connection.clone())
     }
 }
 
