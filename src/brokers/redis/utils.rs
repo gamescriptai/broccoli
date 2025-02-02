@@ -89,7 +89,7 @@ impl RedisBroker {
                 redis.call('SREM', KEYS[3], queue_to_process)
                 end
 
-                if ARGV[2] then
+                if ARGV[2] == "false" then
                     local processing_queue_name = string.format("%s_%s_processing", KEYS[2], queue_to_process)
                     redis.call('LPUSH', processing_queue_name, message)
                 end
@@ -103,7 +103,8 @@ impl RedisBroker {
                 .arg(
                     options
                         .map(|x| x.auto_ack.unwrap_or(false))
-                        .unwrap_or(false),
+                        .unwrap_or(false)
+                        .to_string(),
                 )
                 .key(format!("{}_fairness_round_robin", queue_name))
                 .key(queue_name)
@@ -126,10 +127,8 @@ impl RedisBroker {
                 redis.call('ZADD', KEYS[1], score, message)
                 return nil
                 end
-
-                redis.log(redis.LOG_NOTICE, ARGV[2])
                 
-                if ARGV[2] then
+                if ARGV[2] == "false" then
                     redis.call('LPUSH', KEYS[2], message)
                 end
                 return message
@@ -141,7 +140,8 @@ impl RedisBroker {
                 .arg(
                     options
                         .map(|x| x.auto_ack.unwrap_or(false))
-                        .unwrap_or(false),
+                        .unwrap_or(false)
+                        .to_string(),
                 )
                 .key(queue_name)
                 .key(format!("{}_processing", queue_name))

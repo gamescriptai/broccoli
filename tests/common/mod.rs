@@ -11,6 +11,13 @@ pub async fn setup_queue() -> BroccoliQueue {
         .expect("Queue setup failed. Are you sure Redis/RabbitMQ is running?")
 }
 
+#[cfg(feature = "redis")]
+pub async fn get_redis_client() -> redis::aio::MultiplexedConnection {
+    let queue_url = std::env::var("BROCCOLI_QUEUE_URL").unwrap();
+    let client = redis::Client::open(queue_url).unwrap();
+    client.get_multiplexed_async_connection().await.unwrap()
+}
+
 pub async fn setup_fair_queue() -> BroccoliQueue {
     let queue_url = std::env::var("BROCCOLI_QUEUE_URL").unwrap();
     BroccoliQueue::builder(queue_url)

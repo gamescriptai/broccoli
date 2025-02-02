@@ -1,5 +1,6 @@
-use broccoli_queue::queue::ConsumeOptionsBuilder;
-use broccoli_queue::queue::PublishOptions;
+use broccoli_queue::queue::{ConsumeOptionsBuilder, PublishOptions};
+#[cfg(feature = "redis")]
+use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use time::Duration;
 
@@ -17,6 +18,8 @@ async fn test_publish_and_consume() {
     let queue = common::setup_queue().await;
     #[cfg(feature = "test-fairness")]
     let queue = common::setup_fair_queue().await;
+    #[cfg(feature = "redis")]
+    let mut redis = common::get_redis_client().await;
     let test_topic = "test_publish_topic";
 
     // Test message
@@ -45,6 +48,32 @@ async fn test_publish_and_consume() {
 
     assert_eq!(published.payload, consumed.payload);
     assert_eq!(published.task_id, consumed.task_id);
+
+    #[cfg(feature = "redis")]
+    {
+        #[cfg(not(feature = "test-fairness"))]
+        let processing_queue_name = format!("{}_processing", test_topic);
+        #[cfg(feature = "test-fairness")]
+        let processing_queue_name = format!("{}_job-1_processing", test_topic);
+
+        // Verify message is in the processing queue
+        let processing: usize = redis.llen(processing_queue_name).await.unwrap();
+        assert_eq!(processing, 1, "Message should be in processing queue");
+
+        #[cfg(not(feature = "test-fairness"))]
+        let queue_name = test_topic;
+        #[cfg(feature = "test-fairness")]
+        let queue_name = format!("{}_job-1_queue", test_topic);
+
+        queue
+            .acknowledge(&queue_name, consumed)
+            .await
+            .expect("Failed to acknowledge message");
+
+        // After acknowledge, verify cleanup
+        let exists: bool = redis.exists(published.task_id.to_string()).await.unwrap();
+        assert!(!exists, "Message should be cleaned up after acknowledge");
+    }
 }
 
 #[tokio::test]
@@ -53,6 +82,8 @@ async fn test_batch_publish_and_consume() {
     let queue = common::setup_queue().await;
     #[cfg(feature = "test-fairness")]
     let queue = common::setup_fair_queue().await;
+    #[cfg(feature = "redis")]
+    let mut redis = common::get_redis_client().await;
     let test_topic = "test_batch_topic";
 
     // Test messages
@@ -93,6 +124,21 @@ async fn test_batch_publish_and_consume() {
     assert_eq!(published.len(), consumed.len());
     assert_eq!(published[0].payload, consumed[0].payload);
     assert_eq!(published[1].payload, consumed[1].payload);
+
+    #[cfg(feature = "redis")]
+    {
+        #[cfg(not(feature = "test-fairness"))]
+        let queue_name = test_topic;
+        #[cfg(feature = "test-fairness")]
+        let queue_name = format!("{}_job-1_queue", test_topic);
+
+        // Verify queue size after consuming
+        let remaining: usize = redis.zcard(queue_name).await.unwrap();
+        assert_eq!(
+            remaining, 0,
+            "Queue should be empty after consuming all messages"
+        );
+    }
 }
 
 #[tokio::test]
@@ -101,6 +147,8 @@ async fn test_delayed_message() {
     let queue = common::setup_queue().await;
     #[cfg(feature = "test-fairness")]
     let queue = common::setup_fair_queue().await;
+    #[cfg(feature = "redis")]
+    let mut redis = common::get_redis_client().await;
     let test_topic = "test_delayed_topic";
 
     let message = TestMessage {
@@ -139,6 +187,23 @@ async fn test_delayed_message() {
     // Wait for delay
     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
 
+    #[cfg(feature = "redis")]
+    {
+        #[cfg(not(feature = "test-fairness"))]
+        let queue_name = test_topic;
+        #[cfg(feature = "test-fairness")]
+        let queue_name = format!("{}_job-1_queue", test_topic);
+
+        // Verify delayed message score
+        let scores: Vec<(String, f64)> = redis
+            .zrangebyscore_withscores(queue_name, "-inf", "+inf")
+            .await
+            .unwrap();
+        assert!(!scores.is_empty(), "Delayed message should be in queue");
+        let now = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as f64;
+        assert!(scores[0].1 > now, "Message score should be in future");
+    }
+
     // Now consume (should get message)
     let delayed_result = queue
         .consume::<TestMessage>(test_topic, Default::default())
@@ -154,6 +219,8 @@ async fn test_scheduled_message() {
     let queue = common::setup_queue().await;
     #[cfg(feature = "test-fairness")]
     let queue = common::setup_fair_queue().await;
+    #[cfg(feature = "redis")]
+    let mut redis = common::get_redis_client().await;
     let test_topic = "test_scheduled_topic";
 
     let message = TestMessage {
@@ -199,6 +266,18 @@ async fn test_scheduled_message() {
         .expect("Failed to consume scheduled message");
 
     assert_eq!(published.payload.content, scheduled_result.payload.content);
+
+    #[cfg(feature = "redis")]
+    {
+        #[cfg(not(feature = "test-fairness"))]
+        let queue_name = test_topic;
+        #[cfg(feature = "test-fairness")]
+        let queue_name = format!("{}_job-1_queue", test_topic);
+
+        // Verify queue is empty
+        let remaining: usize = redis.zcard(queue_name).await.unwrap();
+        assert_eq!(remaining, 0, "Queue should be empty after consuming");
+    }
 }
 
 #[tokio::test]
@@ -207,6 +286,8 @@ async fn test_message_retry() {
     let queue = common::setup_queue().await;
     #[cfg(feature = "test-fairness")]
     let queue = common::setup_fair_queue().await;
+    #[cfg(feature = "redis")]
+    let mut redis = common::get_redis_client().await;
     let test_topic = "test_retry_topic";
 
     let message = TestMessage {
@@ -216,12 +297,12 @@ async fn test_message_retry() {
 
     // Publish message
     #[cfg(not(feature = "test-fairness"))]
-    queue
+    let published = queue
         .publish(test_topic, None, &message, None)
         .await
         .expect("Failed to publish message");
     #[cfg(feature = "test-fairness")]
-    queue
+    let published = queue
         .publish(test_topic, Some(String::from("job-1")), &message, None)
         .await
         .expect("Failed to publish message");
@@ -246,6 +327,25 @@ async fn test_message_retry() {
         .await
         .unwrap();
     assert!(result.is_none());
+
+    #[cfg(feature = "redis")]
+    {
+        #[cfg(not(feature = "test-fairness"))]
+        let failed_queue_name = format!("{}_failed", test_topic);
+        #[cfg(feature = "test-fairness")]
+        let failed_queue_name = format!("{}_job-1_failed", test_topic);
+
+        // Verify message in failed queue
+        let failed_len: usize = redis.llen(failed_queue_name).await.unwrap();
+        assert_eq!(failed_len, 1, "Message should be in failed queue");
+
+        // Verify attempts counter
+        let attempts: String = redis
+            .hget(published.task_id.to_string(), "attempts")
+            .await
+            .unwrap();
+        assert_eq!(attempts, "2", "Attempts counter should be 2");
+    }
 }
 
 #[tokio::test]
@@ -254,6 +354,8 @@ async fn test_message_acknowledgment() {
     let queue = common::setup_queue().await;
     #[cfg(feature = "test-fairness")]
     let queue = common::setup_fair_queue().await;
+    #[cfg(feature = "redis")]
+    let mut redis = common::get_redis_client().await;
     let test_topic = "test_ack_topic";
 
     let message = TestMessage {
@@ -290,6 +392,27 @@ async fn test_message_acknowledgment() {
         .await
         .unwrap();
     assert!(result.is_none());
+
+    #[cfg(feature = "redis")]
+    {
+        #[cfg(not(feature = "test-fairness"))]
+        let queue_name = test_topic;
+        #[cfg(feature = "test-fairness")]
+        let queue_name = format!("{}_job-1_queue", test_topic);
+
+        // Verify queue is empty
+        let remaining: usize = redis.zcard(queue_name).await.unwrap();
+        assert_eq!(remaining, 0, "Queue should be empty after acknowledgment");
+
+        // Verify processing queue is empty
+        #[cfg(not(feature = "test-fairness"))]
+        let processing_queue = format!("{}_processing", test_topic);
+        #[cfg(feature = "test-fairness")]
+        let processing_queue = format!("{}_job-1_processing", test_topic);
+
+        let processing: usize = redis.llen(processing_queue).await.unwrap();
+        assert_eq!(processing, 0, "Processing queue should be empty");
+    }
 }
 
 #[tokio::test]
@@ -298,6 +421,8 @@ async fn test_message_auto_ack() {
     let queue = common::setup_queue().await;
     #[cfg(feature = "test-fairness")]
     let queue = common::setup_fair_queue().await;
+    #[cfg(feature = "redis")]
+    let mut redis = common::get_redis_client().await;
     let test_topic = "test_auto_ack_topic";
 
     let message = TestMessage {
@@ -329,6 +454,27 @@ async fn test_message_auto_ack() {
         .await
         .unwrap();
     assert!(result.is_none());
+
+    #[cfg(feature = "redis")]
+    {
+        #[cfg(not(feature = "test-fairness"))]
+        let queue_name = test_topic;
+        #[cfg(feature = "test-fairness")]
+        let queue_name = format!("{}_job-1_queue", test_topic);
+
+        // Verify queue is empty
+        let remaining: usize = redis.zcard(queue_name).await.unwrap();
+        assert_eq!(remaining, 0, "Queue should be empty after auto-ack");
+
+        // Verify processing queue doesn't exist (auto-ack skips processing queue)
+        #[cfg(not(feature = "test-fairness"))]
+        let processing_queue = format!("{}_processing", test_topic);
+        #[cfg(feature = "test-fairness")]
+        let processing_queue = format!("{}_job-1_processing", test_topic);
+
+        let processing: usize = redis.llen(processing_queue).await.unwrap();
+        assert_eq!(processing, 0, "Processing queue should be empty");
+    }
 }
 
 #[tokio::test]
@@ -337,6 +483,8 @@ async fn test_message_cancellation() {
     let queue = common::setup_queue().await;
     #[cfg(feature = "test-fairness")]
     let queue = common::setup_fair_queue().await;
+    #[cfg(feature = "redis")]
+    let mut redis = common::get_redis_client().await;
     let test_topic = "test_cancel_topic";
 
     let message = TestMessage {
@@ -377,6 +525,22 @@ async fn test_message_cancellation() {
         .await
         .unwrap();
     assert!(result.is_none());
+
+    #[cfg(feature = "redis")]
+    {
+        #[cfg(not(feature = "test-fairness"))]
+        let queue_name = test_topic;
+        #[cfg(feature = "test-fairness")]
+        let queue_name = format!("{}_job-1_queue", test_topic);
+
+        // Verify message removed from queue
+        let remaining: usize = redis.zcard(queue_name).await.unwrap();
+        assert_eq!(remaining, 0, "Queue should be empty after cancellation");
+
+        // Verify message metadata cleaned up
+        let exists: bool = redis.exists(published.task_id.to_string()).await.unwrap();
+        assert!(!exists, "Message should be cleaned up after cancellation");
+    }
 }
 
 #[tokio::test]
@@ -385,6 +549,8 @@ async fn test_message_priority() {
     let queue = common::setup_queue().await;
     #[cfg(feature = "test-fairness")]
     let queue = common::setup_fair_queue().await;
+    #[cfg(feature = "redis")]
+    let mut redis = common::get_redis_client().await;
     let test_topic = "test_priority_topic";
 
     // Create messages with different priorities
@@ -486,4 +652,28 @@ async fn test_message_priority() {
     assert_eq!(first.payload.content, "high priority");
     assert_eq!(second.payload.content, "medium priority");
     assert_eq!(third.payload.content, "low priority");
+
+    #[cfg(feature = "redis")]
+    {
+        #[cfg(not(feature = "test-fairness"))]
+        let queue_name = test_topic;
+        #[cfg(feature = "test-fairness")]
+        let queue_name = format!("{}_job-1_queue", test_topic);
+
+        // Verify queue is empty
+        let remaining: usize = redis.zcard(queue_name).await.unwrap();
+        assert_eq!(
+            remaining, 0,
+            "Queue should be empty after consuming all messages"
+        );
+
+        // Verify all messages cleaned up
+        let exists_first: bool = redis.exists(first.task_id.to_string()).await.unwrap();
+        let exists_second: bool = redis.exists(second.task_id.to_string()).await.unwrap();
+        let exists_third: bool = redis.exists(third.task_id.to_string()).await.unwrap();
+        assert!(
+            !exists_first && !exists_second && !exists_third,
+            "All messages should be cleaned up"
+        );
+    }
 }

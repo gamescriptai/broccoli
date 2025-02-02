@@ -1,5 +1,7 @@
 #[cfg(all(feature = "redis", feature = "test-fairness"))]
 use broccoli_queue::queue::PublishOptions;
+#[cfg(feature = "redis")]
+use redis::AsyncCommands;
 #[cfg(all(feature = "redis", feature = "test-fairness"))]
 use serde::{Deserialize, Serialize};
 #[cfg(all(feature = "redis", feature = "test-fairness"))]
@@ -18,6 +20,8 @@ struct TestMessage {
 #[cfg(all(feature = "redis", feature = "test-fairness"))]
 async fn test_fairness_round_robin() {
     let queue = common::setup_fair_queue().await;
+    #[cfg(feature = "redis")]
+    let mut redis = common::get_redis_client().await;
     let test_topic = "test_fairness_topic";
 
     // Publish messages from different jobs
@@ -39,6 +43,31 @@ async fn test_fairness_round_robin() {
             .publish(test_topic, Some(String::from(job_id)), &message, None)
             .await
             .expect("Failed to publish message");
+    }
+
+    #[cfg(feature = "redis")]
+    {
+        // Verify fairness data structures
+        let set_exists: bool = redis
+            .exists(format!("{}_fairness_set", test_topic))
+            .await
+            .unwrap();
+        assert!(set_exists, "Fairness set should exist");
+
+        let round_robin_exists: bool = redis
+            .exists(format!("{}_fairness_round_robin", test_topic))
+            .await
+            .unwrap();
+        assert!(round_robin_exists, "Round robin list should exist");
+
+        // Verify job queues
+        for job_id in ["job-1", "job-2", "job-3"] {
+            let queue_exists: bool = redis
+                .exists(format!("{}_{}_queue", test_topic, job_id))
+                .await
+                .unwrap();
+            assert!(queue_exists, "Job queue for {} should exist", job_id);
+        }
     }
 
     // Consume messages - they should come in round-robin order
@@ -69,6 +98,8 @@ async fn test_fairness_round_robin() {
 async fn test_fairness_with_priorities() {
     let queue = common::setup_fair_queue().await;
     let test_topic = "test_fairness_priority_topic";
+    #[cfg(feature = "redis")]
+    let mut redis = common::get_redis_client().await;
 
     // Publish messages with different priorities from different jobs
     let messages = vec![
@@ -84,7 +115,7 @@ async fn test_fairness_with_priorities() {
             content: content.to_string(),
         };
         let options = PublishOptions::builder().priority(priority).build();
-        queue
+        let published = queue
             .publish(
                 test_topic,
                 Some(String::from(job_id)),
@@ -93,6 +124,20 @@ async fn test_fairness_with_priorities() {
             )
             .await
             .expect("Failed to publish message");
+
+        #[cfg(feature = "redis")]
+        {
+            // Verify message metadata includes priority
+            let priority_stored: String = redis
+                .hget(published.task_id.to_string(), "priority")
+                .await
+                .unwrap();
+            assert_eq!(
+                priority_stored,
+                priority.to_string(),
+                "Priority should be stored correctly"
+            );
+        }
     }
 
     // Consume messages - they should respect both fairness and priority
@@ -107,6 +152,20 @@ async fn test_fairness_with_priorities() {
             .acknowledge(test_topic, msg)
             .await
             .expect("Failed to acknowledge message");
+    }
+
+    #[cfg(feature = "redis")]
+    {
+        // Verify queues are empty after consumption
+        for job_id in ["job-1", "job-2"] {
+            let queue_name = format!("{}_{}_queue", test_topic, job_id);
+            let queue_len: usize = redis.zcard(&queue_name).await.unwrap();
+            assert_eq!(queue_len, 0, "Queue should be empty after consumption");
+
+            let processing_queue = format!("{}_{}_processing", test_topic, job_id);
+            let proc_len: usize = redis.llen(&processing_queue).await.unwrap();
+            assert_eq!(proc_len, 0, "Processing queue should be empty");
+        }
     }
 
     // Verify that high priority messages come first but still alternate between jobs
@@ -127,6 +186,8 @@ async fn test_fairness_with_priorities() {
 async fn test_fairness_with_delayed_messages() {
     let queue = common::setup_fair_queue().await;
     let test_topic = "test_fairness_delay_topic";
+    #[cfg(feature = "redis")]
+    let mut redis = common::get_redis_client().await;
 
     // Publish immediate and delayed messages from different jobs
     let immediate_msg = TestMessage {
@@ -160,6 +221,33 @@ async fn test_fairness_with_delayed_messages() {
         .await
         .expect("Failed to publish delayed message");
 
+    #[cfg(feature = "redis")]
+    {
+        // Verify initial state
+        let queue_name = format!("{}_job-1_queue", test_topic);
+        let queue_len: usize = redis.zcard(&queue_name).await.unwrap();
+        assert_eq!(queue_len, 1, "Queue should have one message");
+
+        let queue_name_2 = format!("{}_job-2_queue", test_topic);
+        let queue_len_2: usize = redis.zcard(&queue_name_2).await.unwrap();
+        assert_eq!(queue_len_2, 1, "Queue should have one message");
+
+        // Verify message scores (delayed message should have higher score)
+        let scores_1: Vec<(String, f64)> = redis
+            .zrangebyscore_withscores(&queue_name, "-inf", "+inf")
+            .await
+            .unwrap();
+        let scores_2: Vec<(String, f64)> = redis
+            .zrangebyscore_withscores(&queue_name_2, "-inf", "+inf")
+            .await
+            .unwrap();
+
+        assert!(
+            scores_2[0].1 > scores_1[0].1,
+            "Delayed message should have higher score"
+        );
+    }
+
     // Consume immediate message
     let first = queue
         .consume::<TestMessage>(test_topic, None)
@@ -184,6 +272,20 @@ async fn test_fairness_with_delayed_messages() {
         .acknowledge(test_topic, second)
         .await
         .expect("Failed to acknowledge second message");
+
+    #[cfg(feature = "redis")]
+    {
+        // Verify final state
+        for job_id in ["job-1", "job-2"] {
+            let queue_name = format!("{}_{}_queue", test_topic, job_id);
+            let queue_len: usize = redis.zcard(&queue_name).await.unwrap();
+            assert_eq!(queue_len, 0, "Queue should be empty after consumption");
+
+            let processing_queue = format!("{}_{}_processing", test_topic, job_id);
+            let proc_len: usize = redis.llen(&processing_queue).await.unwrap();
+            assert_eq!(proc_len, 0, "Processing queue should be empty");
+        }
+    }
 }
 
 #[tokio::test]
@@ -191,6 +293,8 @@ async fn test_fairness_with_delayed_messages() {
 async fn test_fairness_with_retries() {
     let queue = common::setup_fair_queue().await;
     let test_topic = "test_fairness_retry_topic";
+    #[cfg(feature = "redis")]
+    let mut redis = common::get_redis_client().await;
 
     // Publish messages from different jobs
     let messages = vec![
@@ -229,4 +333,28 @@ async fn test_fairness_with_retries() {
         .await
         .expect("Failed to try consume");
     assert!(result.is_none());
+
+    #[cfg(feature = "redis")]
+    {
+        for job_id in ["job-1", "job-2"] {
+            // Verify messages moved to failed queues
+            let failed_queue = format!("{}_{}_failed", test_topic, job_id);
+            let failed_len: usize = redis.llen(&failed_queue).await.unwrap();
+            assert_eq!(
+                failed_len, 1,
+                "Failed queue for {} should have one message",
+                job_id
+            );
+
+            // Verify original queues are empty
+            let queue_name = format!("{}_{}_queue", test_topic, job_id);
+            let queue_len: usize = redis.zcard(&queue_name).await.unwrap();
+            assert_eq!(queue_len, 0, "Queue should be empty after retries");
+
+            // Verify processing queues are empty
+            let processing_queue = format!("{}_{}_processing", test_topic, job_id);
+            let proc_len: usize = redis.llen(&processing_queue).await.unwrap();
+            assert_eq!(proc_len, 0, "Processing queue should be empty");
+        }
+    }
 }
