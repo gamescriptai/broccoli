@@ -1,4 +1,5 @@
-use broccoli_queue::queue::PublishOptions;
+use broccoli_queue::queue::ConsumeOptions;
+use broccoli_queue::queue::{ConsumeOptionsBuilder, PublishOptions};
 #[cfg(feature = "redis")]
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
@@ -20,10 +21,7 @@ async fn test_invalid_broker_url() {
 
 #[tokio::test]
 async fn test_empty_payload() {
-    #[cfg(not(feature = "test-fairness"))]
     let queue = common::setup_queue().await;
-    #[cfg(feature = "test-fairness")]
-    let queue = common::setup_fair_queue().await;
 
     let test_topic = "test_empty_topic";
 
@@ -48,8 +46,13 @@ async fn test_empty_payload() {
         .await;
     assert!(result.is_ok());
 
+    #[cfg(not(feature = "test-fairness"))]
+    let consume_options = ConsumeOptions::default();
+    #[cfg(feature = "test-fairness")]
+    let consume_options = ConsumeOptionsBuilder::new().fairness(true).build();
+
     let consumed = queue
-        .consume::<TestMessage>(test_topic, Default::default())
+        .consume::<TestMessage>(test_topic, Some(consume_options))
         .await
         .unwrap();
     assert_eq!(consumed.payload, empty_message);
@@ -69,10 +72,8 @@ async fn test_empty_payload() {
 
 #[tokio::test]
 async fn test_very_large_payload() {
-    #[cfg(not(feature = "test-fairness"))]
     let queue = common::setup_queue().await;
-    #[cfg(feature = "test-fairness")]
-    let queue = common::setup_fair_queue().await;
+
     let test_topic = "test_large_topic";
 
     let large_content = "x".repeat(1024 * 1024); // 1MB of data
@@ -97,8 +98,13 @@ async fn test_very_large_payload() {
         .await;
     assert!(result.is_ok());
 
+    #[cfg(not(feature = "test-fairness"))]
+    let consume_options = ConsumeOptions::default();
+    #[cfg(feature = "test-fairness")]
+    let consume_options = ConsumeOptionsBuilder::new().fairness(true).build();
+
     let consumed = queue
-        .consume::<TestMessage>(test_topic, Default::default())
+        .consume::<TestMessage>(test_topic, Some(consume_options))
         .await
         .unwrap();
     assert_eq!(consumed.payload.content.len(), large_content.len());
@@ -118,10 +124,8 @@ async fn test_very_large_payload() {
 
 #[tokio::test]
 async fn test_concurrent_consume() {
-    #[cfg(not(feature = "test-fairness"))]
     let queue = common::setup_queue().await;
-    #[cfg(feature = "test-fairness")]
-    let queue = common::setup_fair_queue().await;
+
     let test_topic = "test_concurrent_topic";
 
     // Redis client for verification
@@ -154,8 +158,13 @@ async fn test_concurrent_consume() {
         let queue_clone = queue.clone();
         let topic = test_topic.to_string();
         handles.push(tokio::spawn(async move {
+            #[cfg(not(feature = "test-fairness"))]
+            let consume_options = ConsumeOptions::default();
+            #[cfg(feature = "test-fairness")]
+            let consume_options = ConsumeOptionsBuilder::new().fairness(true).build();
+
             let msg = queue_clone
-                .consume::<TestMessage>(&topic, Default::default())
+                .consume::<TestMessage>(&topic, Some(consume_options))
                 .await
                 .unwrap();
             queue_clone
@@ -225,10 +234,8 @@ async fn test_concurrent_consume() {
 
 #[tokio::test]
 async fn test_zero_ttl() {
-    #[cfg(not(feature = "test-fairness"))]
     let queue = common::setup_queue().await;
-    #[cfg(feature = "test-fairness")]
-    let queue = common::setup_fair_queue().await;
+
     let test_topic = "test_zero_ttl_topic";
 
     #[cfg(feature = "redis")]
@@ -257,9 +264,14 @@ async fn test_zero_ttl() {
         .await
         .unwrap();
 
+    #[cfg(not(feature = "test-fairness"))]
+    let consume_options = ConsumeOptions::default();
+    #[cfg(feature = "test-fairness")]
+    let consume_options = ConsumeOptionsBuilder::new().fairness(true).build();
+
     // Message should not be available
     let result = queue
-        .try_consume::<TestMessage>(test_topic, Default::default())
+        .try_consume::<TestMessage>(test_topic, Some(consume_options))
         .await
         .unwrap();
     assert!(result.is_none());
@@ -297,10 +309,8 @@ async fn test_zero_ttl() {
 
 #[tokio::test]
 async fn test_message_ordering() {
-    #[cfg(not(feature = "test-fairness"))]
     let queue = common::setup_queue().await;
-    #[cfg(feature = "test-fairness")]
-    let queue = common::setup_fair_queue().await;
+
     let test_topic = "test_ordering_topic";
 
     // Redis client for verification
@@ -350,9 +360,14 @@ async fn test_message_ordering() {
             .unwrap();
     }
 
+    #[cfg(not(feature = "test-fairness"))]
+    let consume_options = ConsumeOptions::default();
+    #[cfg(feature = "test-fairness")]
+    let consume_options = ConsumeOptionsBuilder::new().fairness(true).build();
+
     // Consume messages
     let third = queue
-        .consume::<TestMessage>(test_topic, Default::default())
+        .consume::<TestMessage>(test_topic, Some(consume_options.clone()))
         .await
         .unwrap();
     queue.acknowledge(test_topic, third.clone()).await.unwrap();
@@ -361,12 +376,12 @@ async fn test_message_ordering() {
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
     let second = queue
-        .consume::<TestMessage>(test_topic, Default::default())
+        .consume::<TestMessage>(test_topic, Some(consume_options.clone()))
         .await
         .unwrap();
     queue.acknowledge(test_topic, second.clone()).await.unwrap();
     let first = queue
-        .consume::<TestMessage>(test_topic, Default::default())
+        .consume::<TestMessage>(test_topic, Some(consume_options))
         .await
         .unwrap();
     queue.acknowledge(test_topic, first.clone()).await.unwrap();

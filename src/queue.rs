@@ -90,8 +90,6 @@ pub struct BroccoliQueueBuilder {
     /// NOTE: If you enable this w/ rabbitmq, you will need to install the delayed-exchange plugin
     /// https://www.rabbitmq.com/blog/2015/04/16/scheduling-messages-with-rabbitmq
     enable_scheduling: Option<bool>,
-    /// Whether to enable fairness
-    enable_fairness: Option<bool>,
 }
 
 impl BroccoliQueueBuilder {
@@ -109,7 +107,6 @@ impl BroccoliQueueBuilder {
             retry_failed: None,
             pool_connections: None,
             enable_scheduling: None,
-            enable_fairness: None,
         }
     }
 
@@ -153,18 +150,6 @@ impl BroccoliQueueBuilder {
         self
     }
 
-    /// Enables or disables fairness.
-    ///
-    /// # Arguments
-    /// * `enable_fairness` - If true, fairness will be enabled.
-    ///
-    /// # Returns
-    /// The updated `BroccoliQueueBuilder` instance.
-    pub fn enable_fairness(mut self, enable_fairness: bool) -> Self {
-        self.enable_fairness = Some(enable_fairness);
-        self
-    }
-
     /// Builds the `BroccoliQueue` with the specified configuration.
     ///
     /// # Returns
@@ -175,7 +160,6 @@ impl BroccoliQueueBuilder {
             retry_failed: self.retry_failed,
             pool_connections: self.pool_connections,
             enable_scheduling: self.enable_scheduling,
-            enable_fairness: self.enable_fairness,
         };
 
         let broker = connect_to_broker(&self.broker_url, Some(config))
@@ -193,12 +177,15 @@ impl BroccoliQueueBuilder {
 pub struct ConsumeOptions {
     /// Whether to auto-acknowledge messages. Default is false. If you try to acknowledge or reject a message that has been auto-acknowledged, it will result in an error.
     pub auto_ack: Option<bool>,
+    /// Whether to consume from a fairness queue or not. This is only supported by the Redis Broker.
+    pub fairness: Option<bool>,
 }
 
 impl Default for ConsumeOptions {
     fn default() -> Self {
         Self {
             auto_ack: Some(false),
+            fairness: None,
         }
     }
 }
@@ -214,12 +201,16 @@ impl ConsumeOptions {
 #[derive(Default, Debug)]
 pub struct ConsumeOptionsBuilder {
     auto_ack: Option<bool>,
+    fairness: Option<bool>,
 }
 
 impl ConsumeOptionsBuilder {
     /// Creates a new ConsumeOptionsBuilder with default values.
     pub fn new() -> Self {
-        Self { auto_ack: None }
+        Self {
+            auto_ack: None,
+            fairness: None,
+        }
     }
 
     /// Sets whether messages should be auto-acknowledged.
@@ -228,10 +219,17 @@ impl ConsumeOptionsBuilder {
         self
     }
 
+    /// Sets whether to consume from a fairness queue.
+    pub fn fairness(mut self, fairness: bool) -> Self {
+        self.fairness = Some(fairness);
+        self
+    }
+
     /// Builds the ConsumeOptions with the configured values.
     pub fn build(self) -> ConsumeOptions {
         ConsumeOptions {
             auto_ack: self.auto_ack,
+            fairness: self.fairness,
         }
     }
 }

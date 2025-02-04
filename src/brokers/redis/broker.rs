@@ -69,17 +69,6 @@ impl Broker for RedisBroker {
         publish_options: Option<PublishOptions>,
     ) -> Result<Vec<InternalBrokerMessage>, BroccoliError> {
         let mut redis_connection = self.get_redis_connection().await?;
-        let enable_fairness = self
-            .config
-            .as_ref()
-            .map(|config| config.enable_fairness.unwrap_or(false))
-            .unwrap_or(false);
-
-        if enable_fairness && disambiguator.is_none() {
-            return Err(BroccoliError::Broker(
-                "Disambiguator required for fairness queue".to_string(),
-            ));
-        }
 
         for msg in messages {
             let attempts = msg.attempts.to_string();
@@ -162,7 +151,7 @@ impl Broker for RedisBroker {
                 .await?;
         }
 
-        if enable_fairness {
+        if disambiguator.is_some() {
             if let Some(ref disambiguator) = disambiguator {
                 let exists_in_tracking_set = redis_connection
                     .sismember::<String, &str, bool>(

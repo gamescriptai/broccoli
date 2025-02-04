@@ -55,10 +55,9 @@ impl RedisBroker {
         redis_connection: &mut MultiplexedConnection,
         options: Option<ConsumeOptions>,
     ) -> Result<Option<String>, BroccoliError> {
-        let popped_message: Option<String> = if self
-            .config
+        let popped_message: Option<String> = if options
             .as_ref()
-            .is_some_and(|x| x.enable_fairness.unwrap_or(false))
+            .is_some_and(|x| x.fairness.unwrap_or(false))
         {
             let script = redis::Script::new(
                 r#"

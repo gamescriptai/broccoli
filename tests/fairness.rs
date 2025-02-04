@@ -1,3 +1,4 @@
+use broccoli_queue::queue::ConsumeOptionsBuilder;
 #[cfg(all(feature = "redis", feature = "test-fairness"))]
 use broccoli_queue::queue::PublishOptions;
 #[cfg(feature = "redis")]
@@ -19,7 +20,8 @@ struct TestMessage {
 #[tokio::test]
 #[cfg(all(feature = "redis", feature = "test-fairness"))]
 async fn test_fairness_round_robin() {
-    let queue = common::setup_fair_queue().await;
+    let queue = common::setup_queue().await;
+
     #[cfg(feature = "redis")]
     let mut redis = common::get_redis_client().await;
     let test_topic = "test_fairness_topic";
@@ -73,8 +75,13 @@ async fn test_fairness_round_robin() {
     // Consume messages - they should come in round-robin order
     let mut consumed_messages = Vec::new();
     for _ in 0..6 {
+        #[cfg(not(feature = "test-fairness"))]
+        let consume_options = ConsumeOptions::default();
+        #[cfg(feature = "test-fairness")]
+        let consume_options = ConsumeOptionsBuilder::new().fairness(true).build();
+
         let msg = queue
-            .consume::<TestMessage>(test_topic, None)
+            .consume::<TestMessage>(test_topic, Some(consume_options))
             .await
             .expect("Failed to consume message");
         consumed_messages.push((msg.payload.id.clone(), msg.payload.content.clone()));
@@ -96,7 +103,7 @@ async fn test_fairness_round_robin() {
 #[tokio::test]
 #[cfg(all(feature = "redis", feature = "test-fairness"))]
 async fn test_fairness_with_priorities() {
-    let queue = common::setup_fair_queue().await;
+    let queue = common::setup_queue().await;
     let test_topic = "test_fairness_priority_topic";
     #[cfg(feature = "redis")]
     let mut redis = common::get_redis_client().await;
@@ -143,8 +150,13 @@ async fn test_fairness_with_priorities() {
     // Consume messages - they should respect both fairness and priority
     let mut consumed_messages = Vec::new();
     for _ in 0..4 {
+        #[cfg(not(feature = "test-fairness"))]
+        let consume_options = ConsumeOptions::default();
+        #[cfg(feature = "test-fairness")]
+        let consume_options = ConsumeOptionsBuilder::new().fairness(true).build();
+
         let msg = queue
-            .consume::<TestMessage>(test_topic, None)
+            .consume::<TestMessage>(test_topic, Some(consume_options))
             .await
             .expect("Failed to consume message");
         consumed_messages.push((msg.payload.id.clone(), msg.payload.content.clone()));
@@ -184,7 +196,7 @@ async fn test_fairness_with_priorities() {
 #[tokio::test]
 #[cfg(all(feature = "redis", feature = "test-fairness"))]
 async fn test_fairness_with_delayed_messages() {
-    let queue = common::setup_fair_queue().await;
+    let queue = common::setup_queue().await;
     let test_topic = "test_fairness_delay_topic";
     #[cfg(feature = "redis")]
     let mut redis = common::get_redis_client().await;
@@ -248,9 +260,14 @@ async fn test_fairness_with_delayed_messages() {
         );
     }
 
+    #[cfg(not(feature = "test-fairness"))]
+    let consume_options = ConsumeOptions::default();
+    #[cfg(feature = "test-fairness")]
+    let consume_options = ConsumeOptionsBuilder::new().fairness(true).build();
+
     // Consume immediate message
     let first = queue
-        .consume::<TestMessage>(test_topic, None)
+        .consume::<TestMessage>(test_topic, Some(consume_options.clone()))
         .await
         .expect("Failed to consume first message");
     assert_eq!(first.payload.content, "immediate from job 1");
@@ -264,7 +281,7 @@ async fn test_fairness_with_delayed_messages() {
 
     // Consume delayed message
     let second = queue
-        .consume::<TestMessage>(test_topic, None)
+        .consume::<TestMessage>(test_topic, Some(consume_options.clone()))
         .await
         .expect("Failed to consume second message");
     assert_eq!(second.payload.content, "delayed from job 2");
@@ -291,7 +308,7 @@ async fn test_fairness_with_delayed_messages() {
 #[tokio::test]
 #[cfg(all(feature = "redis", feature = "test-fairness"))]
 async fn test_fairness_with_retries() {
-    let queue = common::setup_fair_queue().await;
+    let queue = common::setup_queue().await;
     let test_topic = "test_fairness_retry_topic";
     #[cfg(feature = "redis")]
     let mut redis = common::get_redis_client().await;
@@ -313,11 +330,16 @@ async fn test_fairness_with_retries() {
             .expect("Failed to publish message");
     }
 
+    #[cfg(not(feature = "test-fairness"))]
+    let consume_options = ConsumeOptions::default();
+    #[cfg(feature = "test-fairness")]
+    let consume_options = ConsumeOptionsBuilder::new().fairness(true).build();
+
     // Consume and reject messages
     for _ in 0..2 {
         for _ in 0..3 {
             let msg = queue
-                .consume::<TestMessage>(test_topic, None)
+                .consume::<TestMessage>(test_topic, Some(consume_options.clone()))
                 .await
                 .expect("Failed to consume message");
             queue
@@ -329,7 +351,7 @@ async fn test_fairness_with_retries() {
 
     // Verify messages are in failed queue
     let result = queue
-        .try_consume::<TestMessage>(test_topic, None)
+        .try_consume::<TestMessage>(test_topic, Some(consume_options.clone()))
         .await
         .expect("Failed to try consume");
     assert!(result.is_none());

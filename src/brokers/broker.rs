@@ -29,7 +29,6 @@ pub trait Broker: Send + Sync {
         &self,
         queue_name: &str,
         disambiguator: Option<String>,
-
         message: &[InternalBrokerMessage],
         options: Option<PublishOptions>,
     ) -> Result<Vec<InternalBrokerMessage>, BroccoliError>;
@@ -113,8 +112,6 @@ pub struct BrokerConfig {
     /// NOTE: If you enable this w/ rabbitmq, you will need to install the delayed-exchange plugin
     /// https://www.rabbitmq.com/blog/2015/04/16/scheduling-messages-with-rabbitmq
     pub enable_scheduling: Option<bool>,
-    /// Whether to enable fair queueing
-    pub enable_fairness: Option<bool>,
 }
 
 impl Default for BrokerConfig {
@@ -124,7 +121,6 @@ impl Default for BrokerConfig {
             retry_failed: Some(true),
             pool_connections: Some(10),
             enable_scheduling: Some(false),
-            enable_fairness: Some(false),
         }
     }
 }
