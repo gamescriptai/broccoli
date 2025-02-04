@@ -591,6 +591,7 @@ impl BroccoliQueue {
         &self,
         topic: &str,
         concurrency: Option<usize>,
+        consume_options: Option<ConsumeOptions>,
         handler: F,
     ) -> Result<(), BroccoliError>
     where
@@ -599,6 +600,7 @@ impl BroccoliQueue {
         Fut: Future<Output = Result<(), BroccoliError>> + Send + 'static,
     {
         let handles = FuturesUnordered::new();
+        let consume_options = consume_options.clone();
 
         loop {
             if let Some(concurrency) = concurrency {
@@ -606,16 +608,16 @@ impl BroccoliQueue {
                     let broker = Arc::clone(&self.broker);
                     let topic = topic.to_string();
                     let handler = handler.clone();
+                    let consume_options = consume_options.clone();
 
                     let handle = tokio::spawn(async move {
                         loop {
-                            let message =
-                                broker
-                                    .consume(&topic, Default::default())
-                                    .await
-                                    .map_err(|e| {
-                                        log::error!("Failed to consume message: {:?}", e);
-                                    });
+                            let message = broker
+                                .consume(&topic, consume_options.clone())
+                                .await
+                                .map_err(|e| {
+                                    log::error!("Failed to consume message: {:?}", e);
+                                });
 
                             if let Ok(message) = message {
                                 let broker_message = if let Ok(msg) = message.into_message() {
@@ -655,7 +657,7 @@ impl BroccoliQueue {
             } else {
                 let message = self
                     .broker
-                    .consume(topic, Default::default())
+                    .consume(topic, consume_options.clone())
                     .await
                     .map_err(|e| {
                         log::error!("Failed to consume message: {:?}", e);
@@ -745,6 +747,7 @@ impl BroccoliQueue {
         &self,
         topic: &str,
         concurrency: Option<usize>,
+        consume_options: Option<ConsumeOptions>,
         message_handler: F,
         on_success: S,
         on_error: E,
@@ -759,6 +762,7 @@ impl BroccoliQueue {
         ErrorFut: Future<Output = Result<(), BroccoliError>> + Send + 'static,
     {
         let handles = FuturesUnordered::new();
+        let consume_options = consume_options.clone();
 
         loop {
             if let Some(concurrency) = concurrency {
@@ -768,16 +772,16 @@ impl BroccoliQueue {
                     let message_handler = message_handler.clone();
                     let on_success = on_success.clone();
                     let on_error = on_error.clone();
+                    let consume_options = consume_options.clone();
 
                     let handle = tokio::spawn(async move {
                         loop {
-                            let message =
-                                broker
-                                    .consume(&topic, Default::default())
-                                    .await
-                                    .map_err(|e| {
-                                        log::error!("Failed to consume message: {:?}", e);
-                                    });
+                            let message = broker
+                                .consume(&topic, consume_options.clone())
+                                .await
+                                .map_err(|e| {
+                                    log::error!("Failed to consume message: {:?}", e);
+                                });
 
                             if let Ok(message) = message {
                                 let broker_message = if let Ok(msg) = message.into_message() {
@@ -824,7 +828,7 @@ impl BroccoliQueue {
             } else {
                 let message = self
                     .broker
-                    .consume(topic, Default::default())
+                    .consume(topic, consume_options.clone())
                     .await
                     .map_err(|e| {
                         log::error!("Failed to consume message: {:?}", e);

@@ -1,3 +1,4 @@
+use broccoli_queue::queue::ConsumeOptions;
 use broccoli_queue::queue::ConsumeOptionsBuilder;
 #[cfg(all(feature = "redis", feature = "test-fairness"))]
 use broccoli_queue::queue::PublishOptions;

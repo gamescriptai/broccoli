@@ -53,7 +53,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Process regular jobs
     queue
-        .process_messages("jobs", Some(4), |msg| async move {
+        .process_messages("jobs", Some(4), None, |msg| async move {
             process_job(msg.payload).await
         })
         .await
@@ -63,6 +63,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .process_messages_with_handlers(
             "jobs",
             Some(5),
+            None,
             |msg| async move { process_job(msg.payload).await },
             |msg| async { success_handler(msg.payload).await },
             |msg, err| async { error_handler(msg.payload, err).await },
