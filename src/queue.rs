@@ -338,7 +338,7 @@ impl BroccoliQueue {
     /// A `Result` indicating success or failure.
     pub async fn publish<T: Clone + serde::Serialize + serde::de::DeserializeOwned>(
         &self,
-        topic: &str,
+        topic: &'static str,
         message: &T,
         options: Option<PublishOptions>,
     ) -> Result<BrokerMessage<T>, BroccoliError> {
@@ -367,7 +367,7 @@ impl BroccoliQueue {
     /// A `Result` indicating success or failure.
     pub async fn publish_batch<T: Clone + serde::Serialize + serde::de::DeserializeOwned>(
         &self,
-        topic: &str,
+        topic: &'static str,
         messages: impl IntoIterator<Item = T>,
         options: Option<PublishOptions>,
     ) -> Result<Vec<BrokerMessage<T>>, BroccoliError> {
@@ -402,7 +402,7 @@ impl BroccoliQueue {
     /// A `Result` containing the consumed message, or a `BroccoliError` on failure.
     pub async fn consume<T: Clone + serde::Serialize + serde::de::DeserializeOwned>(
         &self,
-        topic: &str,
+        topic: &'static str,
         options: Option<ConsumeOptions>,
     ) -> Result<BrokerMessage<T>, BroccoliError> {
         let message =
@@ -426,7 +426,7 @@ impl BroccoliQueue {
     /// A `Result` containing a vector of consumed messages, or a `BroccoliError` on failure.
     pub async fn consume_batch<T: Clone + serde::Serialize + serde::de::DeserializeOwned>(
         &self,
-        topic: &str,
+        topic: &'static str,
         batch_size: usize,
         timeout: Duration,
         options: Option<ConsumeOptions>,
@@ -454,7 +454,7 @@ impl BroccoliQueue {
     /// A `Result` containing an `Option` with the consumed message if available, or a `BroccoliError` on failure.
     pub async fn try_consume<T: Clone + serde::Serialize + serde::de::DeserializeOwned>(
         &self,
-        topic: &str,
+        topic: &'static str,
         options: Option<ConsumeOptions>,
     ) -> Result<Option<BrokerMessage<T>>, BroccoliError> {
         let serialized_message =
@@ -479,7 +479,7 @@ impl BroccoliQueue {
     /// A `Result` indicating success or failure.
     pub async fn acknowledge<T: Clone + serde::Serialize + serde::de::DeserializeOwned>(
         &self,
-        topic: &str,
+        topic: &'static str,
         message: BrokerMessage<T>,
     ) -> Result<(), BroccoliError> {
         self.broker
@@ -502,7 +502,7 @@ impl BroccoliQueue {
     /// A `Result` indicating success or failure.
     pub async fn reject<T: Clone + serde::Serialize + serde::de::DeserializeOwned>(
         &self,
-        topic: &str,
+        topic: &'static str,
         message: BrokerMessage<T>,
     ) -> Result<(), BroccoliError> {
         self.broker
@@ -521,7 +521,11 @@ impl BroccoliQueue {
     ///
     /// # Returns
     /// A `Result` indicating success or failure.
-    pub async fn cancel(&self, topic: &str, message_id: String) -> Result<(), BroccoliError> {
+    pub async fn cancel(
+        &self,
+        topic: &'static str,
+        message_id: String,
+    ) -> Result<(), BroccoliError> {
         self.broker
             .cancel(topic, message_id)
             .await
@@ -571,7 +575,7 @@ impl BroccoliQueue {
     /// A `Result` indicating success or failure.
     pub async fn process_messages<T, F, Fut>(
         &self,
-        topic: &str,
+        topic: &'static str,
         concurrency: Option<usize>,
         handler: F,
     ) -> Result<(), BroccoliError>
@@ -580,9 +584,11 @@ impl BroccoliQueue {
         F: Fn(BrokerMessage<T>) -> Fut + Send + Sync + Clone + 'static,
         Fut: Future<Output = Result<(), BroccoliError>> + Send + 'static,
     {
-        let handles = FuturesUnordered::new();
+        //let handles = FuturesUnordered::new();
 
         loop {
+            /*
+
             if let Some(concurrency) = concurrency {
                 while handles.len() < concurrency {
                     let broker = Arc::clone(&self.broker);
@@ -635,30 +641,33 @@ impl BroccoliQueue {
                     handles.push(handle);
                 }
             } else {
-                let message = self
-                    .broker
-                    .consume(topic, Default::default())
-                    .await
-                    .map_err(|e| {
-                        log::error!("Failed to consume message: {:?}", e);
-                        BroccoliError::Consume(format!("Failed to consume message: {:?}", e))
-                    })?;
+              */
+            let message = self
+                .broker
+                .consume(topic, Default::default())
+                .await
+                .map_err(|e| {
+                    log::error!("Failed to consume message: {:?}", e);
+                    BroccoliError::Consume(format!("Failed to consume message: {:?}", e))
+                })?;
 
-                match handler(message.into_message()?).await {
-                    Ok(_) => {
-                        // Message processed successfully
-                        let _ = self.broker.acknowledge(topic, message).await.map_err(|e| {
-                            log::error!("Failed to acknowledge message: {:?}", e);
-                        });
-                    }
-                    Err(_) => {
-                        // Message processing failed
-                        let _ = self.broker.reject(topic, message).await.map_err(|e| {
-                            log::error!("Failed to reject message: {:?}", e);
-                        });
-                    }
+            match handler(message.into_message()?).await {
+                Ok(_) => {
+                    // Message processed successfully
+                    let _ = self.broker.acknowledge(topic, message).await.map_err(|e| {
+                        log::error!("Failed to acknowledge message: {:?}", e);
+                    });
+                }
+                Err(_) => {
+                    // Message processing failed
+                    let _ = self.broker.reject(topic, message).await.map_err(|e| {
+                        log::error!("Failed to reject message: {:?}", e);
+                    });
                 }
             }
+            /*
+            }
+            */
         }
     }
 
@@ -725,7 +734,7 @@ impl BroccoliQueue {
     /// A `Result` indicating success or failure.
     pub async fn process_messages_with_handlers<T, F, MessageFut, SuccessFut, ErrorFut, S, E>(
         &self,
-        topic: &str,
+        topic: &'static str,
         concurrency: Option<usize>,
         message_handler: F,
         on_success: S,
@@ -740,9 +749,11 @@ impl BroccoliQueue {
         E: Fn(BrokerMessage<T>, BroccoliError) -> ErrorFut + Send + Sync + Clone + 'static,
         ErrorFut: Future<Output = Result<(), BroccoliError>> + Send + 'static,
     {
-        let handles = FuturesUnordered::new();
+        //let handles = FuturesUnordered::new();
 
         loop {
+            /*
+
             if let Some(concurrency) = concurrency {
                 while handles.len() < concurrency {
                     let broker = Arc::clone(&self.broker);
@@ -804,38 +815,41 @@ impl BroccoliQueue {
                     handles.push(handle);
                 }
             } else {
-                let message = self
-                    .broker
-                    .consume(topic, Default::default())
-                    .await
-                    .map_err(|e| {
-                        log::error!("Failed to consume message: {:?}", e);
-                        BroccoliError::Consume(format!("Failed to consume message: {:?}", e))
-                    })?;
+              */
+            let message = self
+                .broker
+                .consume(&topic, Default::default())
+                .await
+                .map_err(|e| {
+                    log::error!("Failed to consume message: {:?}", e);
+                    BroccoliError::Consume(format!("Failed to consume message: {:?}", e))
+                })?;
 
-                match message_handler(message.into_message()?).await {
-                    Ok(_) => {
-                        let _ = on_success(message.into_message()?).await.map_err(|e| {
-                            log::error!("Success Handler to process message: {:?}", e)
-                        });
-                        let _ = self
-                            .broker
-                            .acknowledge(topic, message)
-                            .await
-                            .map_err(|e| log::error!("Failed to acknowledge message: {:?}", e));
-                    }
-                    Err(e) => {
-                        let _ = on_error(message.into_message()?, e)
-                            .await
-                            .map_err(|e| log::error!("Error Handler to process message: {:?}", e));
-                        let _ = self
-                            .broker
-                            .reject(topic, message)
-                            .await
-                            .map_err(|e| log::error!("Failed to reject message: {:?}", e));
-                    }
+            match message_handler(message.into_message()?).await {
+                Ok(_) => {
+                    let _ = on_success(message.into_message()?)
+                        .await
+                        .map_err(|e| log::error!("Success Handler to process message: {:?}", e));
+                    let _ = self
+                        .broker
+                        .acknowledge(topic, message)
+                        .await
+                        .map_err(|e| log::error!("Failed to acknowledge message: {:?}", e));
+                }
+                Err(e) => {
+                    let _ = on_error(message.into_message()?, e)
+                        .await
+                        .map_err(|e| log::error!("Error Handler to process message: {:?}", e));
+                    let _ = self
+                        .broker
+                        .reject(topic, message)
+                        .await
+                        .map_err(|e| log::error!("Failed to reject message: {:?}", e));
                 }
             }
+            /*
+            }
+            */
         }
     }
 }

@@ -77,7 +77,7 @@ impl Broker for RabbitMQBroker {
 
     async fn publish(
         &self,
-        queue_name: &str,
+        queue_name: &'static str,
         messages: &[InternalBrokerMessage],
         options: Option<PublishOptions>,
     ) -> Result<Vec<InternalBrokerMessage>, BroccoliError> {
@@ -168,7 +168,7 @@ impl Broker for RabbitMQBroker {
 
     async fn try_consume(
         &self,
-        queue_name: &str,
+        queue_name: &'static str,
         options: Option<ConsumeOptions>,
     ) -> Result<Option<InternalBrokerMessage>, BroccoliError> {
         let pool = self.ensure_pool().await?;
@@ -229,7 +229,7 @@ impl Broker for RabbitMQBroker {
 
     async fn consume(
         &self,
-        queue_name: &str,
+        queue_name: &'static str,
         options: Option<ConsumeOptions>,
     ) -> Result<InternalBrokerMessage, BroccoliError> {
         let pool = self.ensure_pool().await?;
@@ -301,7 +301,7 @@ impl Broker for RabbitMQBroker {
 
     async fn acknowledge(
         &self,
-        _queue_name: &str,
+        _queue_name: &'static str,
         message: InternalBrokerMessage,
     ) -> Result<(), BroccoliError> {
         let delivery_tag = message
@@ -336,7 +336,7 @@ impl Broker for RabbitMQBroker {
 
     async fn reject(
         &self,
-        queue_name: &str,
+        queue_name: &'static str,
         message: InternalBrokerMessage,
     ) -> Result<(), BroccoliError> {
         let delivery_tag = message
@@ -373,7 +373,11 @@ impl Broker for RabbitMQBroker {
         Ok(())
     }
 
-    async fn cancel(&self, _queue_name: &str, _message_id: String) -> Result<(), BroccoliError> {
+    async fn cancel(
+        &self,
+        _queue_name: &'static str,
+        _message_id: String,
+    ) -> Result<(), BroccoliError> {
         Err(BroccoliError::NotImplemented)
     }
 }

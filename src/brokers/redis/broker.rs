@@ -103,7 +103,7 @@ impl Broker for RedisBroker {
     /// A `Result` indicating success or failure.
     async fn publish(
         &self,
-        queue_name: &str,
+        queue_name: &'static str,
         messages: &[InternalBrokerMessage],
         publish_options: Option<PublishOptions>,
     ) -> Result<Vec<InternalBrokerMessage>, BroccoliError> {
@@ -195,7 +195,7 @@ impl Broker for RedisBroker {
     /// if no message is avaiable, and a `BroccoliError` on failure.
     async fn try_consume(
         &self,
-        queue_name: &str,
+        queue_name: &'static str,
         options: Option<ConsumeOptions>,
     ) -> Result<Option<InternalBrokerMessage>, BroccoliError> {
         let redis_pool = self.ensure_pool()?;
@@ -228,7 +228,7 @@ impl Broker for RedisBroker {
     /// A `Result` containing the message as a `String`, or a `BroccoliError` on failure.
     async fn consume(
         &self,
-        queue_name: &str,
+        queue_name: &'static str,
         options: Option<ConsumeOptions>,
     ) -> Result<InternalBrokerMessage, BroccoliError> {
         self.ensure_pool()?;
@@ -258,7 +258,7 @@ impl Broker for RedisBroker {
     /// A `Result` indicating success or failure.
     async fn acknowledge(
         &self,
-        queue_name: &str,
+        queue_name: &'static str,
         message: InternalBrokerMessage,
     ) -> Result<(), BroccoliError> {
         let redis_pool = self.ensure_pool()?;
@@ -286,7 +286,7 @@ impl Broker for RedisBroker {
     /// A `Result` indicating success or failure.
     async fn reject(
         &self,
-        queue_name: &str,
+        queue_name: &'static str,
         message: InternalBrokerMessage,
     ) -> Result<(), BroccoliError> {
         let redis_pool = self.ensure_pool()?;
@@ -367,7 +367,11 @@ impl Broker for RedisBroker {
     ///
     /// # Returns
     /// A `Result` indicating success or failure.
-    async fn cancel(&self, queue_name: &str, message_id: String) -> Result<(), BroccoliError> {
+    async fn cancel(
+        &self,
+        queue_name: &'static str,
+        message_id: String,
+    ) -> Result<(), BroccoliError> {
         let redis_pool = self.ensure_pool()?;
 
         let mut redis_connection = get_redis_connection(&redis_pool).await?;

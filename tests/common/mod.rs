@@ -7,7 +7,7 @@ pub async fn setup_queue() -> BroccoliQueue {
         .enable_scheduling(true)
         .build()
         .await
-        .expect("Queue setup failed. Are you sure Redis/RabbitMQ is running?")
+        .expect("Queue setup failed. Are you sure Redis/RabbitMQ/SurrealDB is running?")
 }
 
 pub async fn setup_queue_with_url(

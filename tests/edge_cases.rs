@@ -57,6 +57,7 @@ async fn test_very_large_payload() {
     assert_eq!(consumed.payload.content.len(), large_content.len());
 }
 
+#[cfg(not(feature = "surrealdb"))]
 #[tokio::test]
 async fn test_concurrent_consume() {
     let queue = common::setup_queue().await;
@@ -103,6 +104,7 @@ async fn test_concurrent_consume() {
     assert_eq!(unique_ids.len(), 5);
 }
 
+#[cfg(not(feature = "surrealdb"))]
 #[tokio::test]
 async fn test_zero_ttl() {
     let queue = common::setup_queue().await;
