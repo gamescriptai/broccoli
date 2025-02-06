@@ -110,13 +110,13 @@ pub struct BrokerConfig {
     /// Whether to enable scheduling for messages
     ///
     /// NOTE: If you enable this w/ rabbitmq, you will need to install the delayed-exchange plugin
-    /// https://www.rabbitmq.com/blog/2015/04/16/scheduling-messages-with-rabbitmq
+    /// <https://www.rabbitmq.com/blog/2015/04/16/scheduling-messages-with-rabbitmq>
     pub enable_scheduling: Option<bool>,
 }
 
 impl Default for BrokerConfig {
     fn default() -> Self {
-        BrokerConfig {
+        Self {
             retry_attempts: Some(3),
             retry_failed: Some(true),
             pool_connections: Some(10),
@@ -130,7 +130,7 @@ impl Default for BrokerConfig {
 /// # Type Parameters
 /// * `T` - The type of the payload, must implement Clone and Serialize
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct BrokerMessage<T: Clone + serde::Serialize> {
+pub struct BrokerMessage<T: Clone> {
     /// Unique identifier for the message
     pub task_id: uuid::Uuid,
     /// The actual message content
@@ -147,7 +147,7 @@ pub struct BrokerMessage<T: Clone + serde::Serialize> {
 impl<T: Clone + serde::Serialize> BrokerMessage<T> {
     /// Creates a new `BrokerMessage` with the provided payload.
     pub fn new(payload: T, disambiguator: Option<String>) -> Self {
-        BrokerMessage {
+        Self {
             task_id: uuid::Uuid::new_v4(),
             payload,
             attempts: 0,
@@ -181,13 +181,14 @@ pub struct InternalBrokerMessage {
 
 impl InternalBrokerMessage {
     /// Creates a new `InternalBrokerMessage` with the provided metadata.
-    pub fn new(
+    #[must_use]
+    pub const fn new(
         task_id: String,
         payload: String,
         attempts: u8,
         disambiguator: Option<String>,
     ) -> Self {
-        InternalBrokerMessage {
+        Self {
             task_id,
             payload,
             attempts,
@@ -199,7 +200,7 @@ impl InternalBrokerMessage {
 
 impl<T: Clone + serde::Serialize> From<BrokerMessage<T>> for InternalBrokerMessage {
     fn from(msg: BrokerMessage<T>) -> Self {
-        InternalBrokerMessage {
+        Self {
             task_id: msg.task_id.to_string(),
             payload: serde_json::to_string(&msg.payload).unwrap_or_default(),
             attempts: msg.attempts,
@@ -211,7 +212,7 @@ impl<T: Clone + serde::Serialize> From<BrokerMessage<T>> for InternalBrokerMessa
 
 impl<T: Clone + serde::Serialize> From<&BrokerMessage<T>> for InternalBrokerMessage {
     fn from(msg: &BrokerMessage<T>) -> Self {
-        InternalBrokerMessage {
+        Self {
             task_id: msg.task_id.to_string(),
             payload: serde_json::to_string(&msg.payload).unwrap_or_default(),
             attempts: msg.attempts,
@@ -223,13 +224,19 @@ impl<T: Clone + serde::Serialize> From<&BrokerMessage<T>> for InternalBrokerMess
 
 impl InternalBrokerMessage {
     /// Converts the internal message to a `BrokerMessage`.
+    ///
+    /// # Returns
+    /// A `Result` containing the `BrokerMessage` or a `BroccoliError` on failure.
+    ///
+    /// # Errors
+    /// If the payload cannot be deserialized.
     pub fn into_message<T: Clone + serde::de::DeserializeOwned + serde::Serialize>(
         &self,
     ) -> Result<BrokerMessage<T>, BroccoliError> {
         Ok(BrokerMessage {
             task_id: self.task_id.parse().unwrap_or_default(),
             payload: serde_json::from_str(&self.payload).map_err(|e| {
-                BroccoliError::Broker(format!("Failed to parse message payload: {}", e))
+                BroccoliError::Broker(format!("Failed to parse message payload: {e}"))
             })?,
             attempts: self.attempts,
             disambiguator: self.disambiguator.clone(),

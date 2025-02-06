@@ -1,4 +1,3 @@
-use broccoli_queue::queue::ConsumeOptions;
 use broccoli_queue::queue::{ConsumeOptionsBuilder, PublishOptions};
 #[cfg(feature = "redis")]
 use redis::AsyncCommands;

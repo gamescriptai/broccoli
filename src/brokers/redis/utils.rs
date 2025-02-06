@@ -15,8 +15,9 @@ use redis::{aio::MultiplexedConnection, FromRedisValue};
 
 impl RedisBroker {
     /// Creates a new `RedisBroker` instance with default configuration.
-    pub fn new() -> Self {
-        RedisBroker {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
             redis_pool: None,
             broker_url: String::new(),
             config: None,
@@ -27,8 +28,9 @@ impl RedisBroker {
     ///
     /// # Arguments
     /// * `config` - The broker configuration to use
-    pub fn new_with_config(config: BrokerConfig) -> Self {
-        RedisBroker {
+    #[must_use]
+    pub const fn new_with_config(config: BrokerConfig) -> Self {
+        Self {
             redis_pool: None,
             broker_url: String::new(),
             config: Some(config),
@@ -101,13 +103,12 @@ impl RedisBroker {
                 .arg(time::OffsetDateTime::now_utc().unix_timestamp_nanos() as f64)
                 .arg(
                     options
-                        .map(|x| x.auto_ack.unwrap_or(false))
-                        .unwrap_or(false)
+                        .is_some_and(|x| x.auto_ack.unwrap_or(false))
                         .to_string(),
                 )
-                .key(format!("{}_fairness_round_robin", queue_name))
+                .key(format!("{queue_name}_fairness_round_robin"))
                 .key(queue_name)
-                .key(format!("{}_fairness_set", queue_name))
+                .key(format!("{queue_name}_fairness_set"))
                 .invoke_async(redis_connection)
                 .await?
         } else {
@@ -138,12 +139,11 @@ impl RedisBroker {
                 .arg(time::OffsetDateTime::now_utc().unix_timestamp_nanos() as f64)
                 .arg(
                     options
-                        .map(|x| x.auto_ack.unwrap_or(false))
-                        .unwrap_or(false)
+                        .is_some_and(|x| x.auto_ack.unwrap_or(false))
                         .to_string(),
                 )
                 .key(queue_name)
-                .key(format!("{}_processing", queue_name))
+                .key(format!("{queue_name}_processing"))
                 .invoke_async(redis_connection)
                 .await?
         };
@@ -176,22 +176,21 @@ impl RedisBroker {
                         self.broker_url.clone(),
                     )
                     .map_err(|e| {
-                        BroccoliError::Broker(format!("Failed to create redis manager: {:?}", e))
+                        BroccoliError::Broker(format!("Failed to create redis manager: {e:?}"))
                     })?;
 
                     let redis_pool = bb8_redis::bb8::Pool::builder()
                         .max_size(
                             self.config
                                 .as_ref()
-                                .map(|config| config.pool_connections.unwrap_or(10))
-                                .unwrap_or(10)
+                                .map_or(10, |config| config.pool_connections.unwrap_or(10))
                                 .into(),
                         )
                         .connection_timeout(std::time::Duration::from_secs(2))
                         .build(redis_manager)
                         .await
                         .map_err(|e| {
-                            BroccoliError::Broker(format!("Failed to create redis pool: {:?}", e))
+                            BroccoliError::Broker(format!("Failed to create redis pool: {e:?}"))
                         })?;
 
                     {
@@ -209,7 +208,7 @@ impl RedisBroker {
                             })?;
                         *pool_write = redis_pool;
                     }
-                    BroccoliError::Broker(format!("Failed to get redis connection: {:?}", err));
+                    BroccoliError::Broker(format!("Failed to get redis connection: {err:?}"));
                     None
                 }
             };
@@ -224,9 +223,8 @@ impl RedisBroker {
                 std::cmp::min(redis_conn_sleep * 2, std::time::Duration::from_secs(300));
         }
 
-        let redis_connection = opt_redis_connection.ok_or(BroccoliError::Broker(
-            "Failed to get redis connection".to_string(),
-        ))?;
+        let redis_connection = opt_redis_connection
+            .ok_or_else(|| BroccoliError::Broker("Failed to get redis connection".to_string()))?;
 
         Ok(redis_connection.clone())
     }
@@ -238,7 +236,7 @@ impl FromRedisValue for OptionalInternalBrokerMessage {
     fn from_redis_value(v: &redis::Value) -> redis::RedisResult<Self> {
         let map: std::collections::HashMap<String, String> = redis::from_redis_value(v)?;
         if map.is_empty() {
-            return Ok(OptionalInternalBrokerMessage(None));
+            return Ok(Self(None));
         }
 
         let task_id = map.get("task_id").ok_or_else(|| {
@@ -265,7 +263,7 @@ impl FromRedisValue for OptionalInternalBrokerMessage {
             MetadataTypes::String(priority.to_string()),
         );
 
-        Ok(OptionalInternalBrokerMessage(Some(InternalBrokerMessage {
+        Ok(Self(Some(InternalBrokerMessage {
             task_id: task_id.to_string(),
             payload: payload.to_string(),
             attempts: attempts.parse().unwrap_or_default(),

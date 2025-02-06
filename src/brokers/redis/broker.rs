@@ -31,22 +31,20 @@ impl Broker for RedisBroker {
     /// # Returns
     /// A `Result` indicating success or failure.
     async fn connect(&mut self, broker_url: &str) -> Result<(), BroccoliError> {
-        let redis_manager = bb8_redis::RedisConnectionManager::new(broker_url).map_err(|e| {
-            BroccoliError::Broker(format!("Failed to create redis manager: {:?}", e))
-        })?;
+        let redis_manager = bb8_redis::RedisConnectionManager::new(broker_url)
+            .map_err(|e| BroccoliError::Broker(format!("Failed to create redis manager: {e:?}")))?;
 
         let redis_pool = bb8_redis::bb8::Pool::builder()
             .max_size(
                 self.config
                     .as_ref()
-                    .map(|config| config.pool_connections.unwrap_or(10))
-                    .unwrap_or(10)
+                    .map_or(10, |config| config.pool_connections.unwrap_or(10))
                     .into(),
             )
             .connection_timeout(std::time::Duration::from_secs(2))
             .build(redis_manager)
             .await
-            .map_err(|e| BroccoliError::Broker(format!("Failed to create redis pool: {:?}", e)))?;
+            .map_err(|e| BroccoliError::Broker(format!("Failed to create redis pool: {e:?}")))?;
 
         self.redis_pool = Some(RwLock::new(redis_pool));
         self.broker_url = broker_url.to_string();
@@ -73,11 +71,13 @@ impl Broker for RedisBroker {
         for msg in messages {
             let attempts = msg.attempts.to_string();
 
-            let priority = publish_options
-                .clone()
-                .unwrap_or_default()
-                .priority
-                .unwrap_or(5) as i64;
+            let priority = i64::from(
+                publish_options
+                    .clone()
+                    .unwrap_or_default()
+                    .priority
+                    .unwrap_or(5),
+            );
 
             if !(1..=5).contains(&priority) {
                 return Err(BroccoliError::Broker(
@@ -108,8 +108,7 @@ impl Broker for RedisBroker {
                     if self
                         .config
                         .as_ref()
-                        .map(|c| c.enable_scheduling.unwrap_or(false))
-                        .unwrap_or(false)
+                        .is_some_and(|c| c.enable_scheduling.unwrap_or(false))
                     {
                         score += (delay.as_seconds_f32() * 1_000_000_000.0) as i64;
                     }
@@ -119,8 +118,7 @@ impl Broker for RedisBroker {
                     if self
                         .config
                         .as_ref()
-                        .map(|c| c.enable_scheduling.unwrap_or(false))
-                        .unwrap_or(false)
+                        .is_some_and(|c| c.enable_scheduling.unwrap_or(false))
                     {
                         score = timestamp.unix_timestamp_nanos() as i64;
                     }
@@ -205,9 +203,10 @@ impl Broker for RedisBroker {
                 break;
             }
 
-            payload = redis_connection.hgetall(&task_id).await.map_err(|e| {
-                BroccoliError::Consume(format!("Failed to consume message: {:?}", e))
-            })?;
+            payload = redis_connection
+                .hgetall(&task_id)
+                .await
+                .map_err(|e| BroccoliError::Consume(format!("Failed to consume message: {e:?}")))?;
         }
 
         Ok(payload.0)
@@ -235,9 +234,9 @@ impl Broker for RedisBroker {
             }
         }
 
-        let message = message.ok_or(BroccoliError::Consume(
-            "Failed to consume message: No message available".to_string(),
-        ))?;
+        let message = message.ok_or_else(|| {
+            BroccoliError::Consume("Failed to consume message: No message available".to_string())
+        })?;
 
         Ok(message)
     }
@@ -257,11 +256,10 @@ impl Broker for RedisBroker {
     ) -> Result<(), BroccoliError> {
         let mut redis_connection = self.get_redis_connection().await?;
 
-        let processing_queue_name = if let Some(ref disambiguator) = message.disambiguator {
-            format!("{}_{}_processing", queue_name, disambiguator)
-        } else {
-            format!("{}_processing", queue_name)
-        };
+        let processing_queue_name = message.disambiguator.as_ref().map_or_else(
+            || format!("{queue_name}_processing"),
+            |disambiguator| format!("{queue_name}_{disambiguator}_processing"),
+        );
 
         redis_connection
             .lrem::<String, &str, String>(processing_queue_name, 1, &message.task_id)
@@ -291,11 +289,10 @@ impl Broker for RedisBroker {
 
         let attempts = message.attempts + 1;
 
-        let processing_queue_name = if let Some(ref disambiguator) = message.disambiguator {
-            format!("{queue_name}_{disambiguator}_processing")
-        } else {
-            format!("{}_processing", queue_name)
-        };
+        let processing_queue_name = message.disambiguator.as_ref().map_or_else(
+            || format!("{queue_name}_processing"),
+            |disambiguator| format!("{queue_name}_{disambiguator}_processing"),
+        );
 
         redis_connection
             .lrem::<String, &str, String>(processing_queue_name, 1, &message.task_id)
@@ -305,19 +302,16 @@ impl Broker for RedisBroker {
             >= self
                 .config
                 .as_ref()
-                .map(|config| config.retry_attempts.unwrap_or(3))
-                .unwrap_or(3))
+                .map_or(3, |config| config.retry_attempts.unwrap_or(3)))
             || !self
                 .config
                 .as_ref()
-                .map(|config| config.retry_failed.unwrap_or(true))
-                .unwrap_or(true)
+                .map_or(true, |config| config.retry_failed.unwrap_or(true))
         {
-            let failed_queue_name = if let Some(ref disambiguator) = message.disambiguator {
-                format!("{queue_name}_{disambiguator}_failed")
-            } else {
-                format!("{queue_name}_failed")
-            };
+            let failed_queue_name = message.disambiguator.as_ref().map_or_else(
+                || format!("{queue_name}_failed"),
+                |disambiguator| format!("{queue_name}_{disambiguator}_failed"),
+            );
 
             redis_connection
                 .lpush::<String, &str, String>(failed_queue_name, &message.task_id)
@@ -334,8 +328,7 @@ impl Broker for RedisBroker {
         if self
             .config
             .as_ref()
-            .map(|config| config.retry_failed.unwrap_or(true))
-            .unwrap_or(true)
+            .map_or(true, |config| config.retry_failed.unwrap_or(true))
         {
             let priority = message
                 .metadata
@@ -343,12 +336,12 @@ impl Broker for RedisBroker {
                 .and_then(|m| m.get("priority"))
                 .and_then(|v| match v {
                     MetadataTypes::String(priority) => Some(priority),
-                    _ => None,
+                    MetadataTypes::U64(_) => None,
                 })
                 .ok_or_else(|| BroccoliError::Acknowledge("Missing priority".to_string()))?
-                .parse::<i64>()
+                .parse::<u8>()
                 .map_err(|e| {
-                    BroccoliError::Acknowledge(format!("Failed to parse priority: {}", e))
+                    BroccoliError::Acknowledge(format!("Failed to parse priority: {e}"))
                 })?;
 
             self.publish(
@@ -356,7 +349,7 @@ impl Broker for RedisBroker {
                 message.disambiguator.clone(),
                 &[message.clone()],
                 Some(PublishOptions {
-                    priority: Some(priority as u8),
+                    priority: Some(priority),
                     ..Default::default()
                 }),
             )

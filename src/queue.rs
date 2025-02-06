@@ -39,7 +39,8 @@ impl RetryStrategy {
     ///
     /// # Returns
     /// A new `RetryStrategy` instance with default configuration.
-    pub fn new() -> Self {
+    #[must_use]
+    pub const fn new() -> Self {
         Self {
             retry_failed: true,
             attempts: Some(3),
@@ -53,7 +54,8 @@ impl RetryStrategy {
     ///
     /// # Returns
     /// The updated `RetryStrategy` instance.
-    pub fn with_attempts(mut self, attempts: u8) -> Self {
+    #[must_use]
+    pub const fn with_attempts(mut self, attempts: u8) -> Self {
         self.attempts = Some(attempts);
         self
     }
@@ -66,13 +68,14 @@ impl RetryStrategy {
     ///
     /// # Returns
     /// The updated `RetryStrategy` instance.
-    pub fn retry_failed(mut self, retry_failed: bool) -> Self {
+    #[must_use]
+    pub const fn retry_failed(mut self, retry_failed: bool) -> Self {
         self.retry_failed = retry_failed;
         self
     }
 }
 
-/// Builder for configuring and creating a BroccoliQueue instance.
+/// Builder for configuring and creating a `BroccoliQueue` instance.
 ///
 /// This struct provides a fluent interface for setting up queue parameters
 /// such as retry strategy and connection pool size.
@@ -88,7 +91,7 @@ pub struct BroccoliQueueBuilder {
     /// Whether to enable message scheduling
     ///
     /// NOTE: If you enable this w/ rabbitmq, you will need to install the delayed-exchange plugin
-    /// https://www.rabbitmq.com/blog/2015/04/16/scheduling-messages-with-rabbitmq
+    /// <https://www.rabbitmq.com/blog/2015/04/16/scheduling-messages-with-rabbitmq>
     enable_scheduling: Option<bool>,
 }
 
@@ -117,7 +120,8 @@ impl BroccoliQueueBuilder {
     ///
     /// # Returns
     /// The updated `BroccoliQueueBuilder` instance.
-    pub fn failed_message_retry_strategy(mut self, strategy: RetryStrategy) -> Self {
+    #[must_use]
+    pub const fn failed_message_retry_strategy(mut self, strategy: RetryStrategy) -> Self {
         self.retry_attempts = strategy.attempts;
         self.retry_failed = Some(strategy.retry_failed);
         self
@@ -130,7 +134,8 @@ impl BroccoliQueueBuilder {
     ///
     /// # Returns
     /// The updated `BroccoliQueueBuilder` instance.
-    pub fn pool_connections(mut self, connections: u8) -> Self {
+    #[must_use]
+    pub const fn pool_connections(mut self, connections: u8) -> Self {
         self.pool_connections = Some(connections);
         self
     }
@@ -138,14 +143,15 @@ impl BroccoliQueueBuilder {
     /// Enables or disables message scheduling.
     ///
     /// NOTE: If you enable this w/ rabbitmq, you will need to install the delayed-exchange plugin
-    /// https://www.rabbitmq.com/blog/2015/04/16/scheduling-messages-with-rabbitmq
+    /// <https://www.rabbitmq.com/blog/2015/04/16/scheduling-messages-with-rabbitmq>
     ///
     /// # Arguments
     /// * `enable_scheduling` - If true, message scheduling will be enabled.
     ///
     /// # Returns
     /// The updated `BroccoliQueueBuilder` instance.
-    pub fn enable_scheduling(mut self, enable_scheduling: bool) -> Self {
+    #[must_use]
+    pub const fn enable_scheduling(mut self, enable_scheduling: bool) -> Self {
         self.enable_scheduling = Some(enable_scheduling);
         self
     }
@@ -154,6 +160,9 @@ impl BroccoliQueueBuilder {
     ///
     /// # Returns
     /// A `Result` containing the `BroccoliQueue` on success, or a `BroccoliError` on failure.
+    ///
+    /// # Errors
+    /// If the broker connection fails, a `BroccoliError` will be returned.
     pub async fn build(self) -> Result<BroccoliQueue, BroccoliError> {
         let config = BrokerConfig {
             retry_attempts: self.retry_attempts,
@@ -164,7 +173,7 @@ impl BroccoliQueueBuilder {
 
         let broker = connect_to_broker(&self.broker_url, Some(config))
             .await
-            .map_err(|e| BroccoliError::Broker(format!("Failed to connect to broker: {}", e)))?;
+            .map_err(|e| BroccoliError::Broker(format!("Failed to connect to broker: {e}")))?;
 
         Ok(BroccoliQueue {
             broker: Arc::new(broker),
@@ -191,13 +200,14 @@ impl Default for ConsumeOptions {
 }
 
 impl ConsumeOptions {
-    /// Creates a new ConsumeOptionsBuilder.
-    pub fn builder() -> ConsumeOptionsBuilder {
+    /// Creates a new `ConsumeOptionsBuilder`.
+    #[must_use]
+    pub const fn builder() -> ConsumeOptionsBuilder {
         ConsumeOptionsBuilder::new()
     }
 }
 
-/// Builder for constructing ConsumeOptions with a fluent interface.
+/// Builder for constructing `ConsumeOptions` with a fluent interface.
 #[derive(Default, Debug)]
 pub struct ConsumeOptionsBuilder {
     auto_ack: Option<bool>,
@@ -205,8 +215,9 @@ pub struct ConsumeOptionsBuilder {
 }
 
 impl ConsumeOptionsBuilder {
-    /// Creates a new ConsumeOptionsBuilder with default values.
-    pub fn new() -> Self {
+    /// Creates a new `ConsumeOptionsBuilder` with default values.
+    #[must_use]
+    pub const fn new() -> Self {
         Self {
             auto_ack: None,
             fairness: None,
@@ -214,19 +225,22 @@ impl ConsumeOptionsBuilder {
     }
 
     /// Sets whether messages should be auto-acknowledged.
-    pub fn auto_ack(mut self, auto_ack: bool) -> Self {
+    #[must_use]
+    pub const fn auto_ack(mut self, auto_ack: bool) -> Self {
         self.auto_ack = Some(auto_ack);
         self
     }
 
     /// Sets whether to consume from a fairness queue.
-    pub fn fairness(mut self, fairness: bool) -> Self {
+    #[must_use]
+    pub const fn fairness(mut self, fairness: bool) -> Self {
         self.fairness = Some(fairness);
         self
     }
 
-    /// Builds the ConsumeOptions with the configured values.
-    pub fn build(self) -> ConsumeOptions {
+    /// Builds the `ConsumeOptions` with the configured values.
+    #[must_use]
+    pub const fn build(self) -> ConsumeOptions {
         ConsumeOptions {
             auto_ack: self.auto_ack,
             fairness: self.fairness,
@@ -248,13 +262,14 @@ pub struct PublishOptions {
 }
 
 impl PublishOptions {
-    /// Creates a new PublishOptionsBuilder.
-    pub fn builder() -> PublishOptionsBuilder {
+    /// Creates a new `PublishOptionsBuilder`.
+    #[must_use]
+    pub const fn builder() -> PublishOptionsBuilder {
         PublishOptionsBuilder::new()
     }
 }
 
-/// Builder for constructing PublishOptions with a fluent interface.
+/// Builder for constructing `PublishOptions` with a fluent interface.
 #[derive(Default, Debug)]
 pub struct PublishOptionsBuilder {
     ttl: Option<Duration>,
@@ -264,8 +279,9 @@ pub struct PublishOptionsBuilder {
 }
 
 impl PublishOptionsBuilder {
-    /// Creates a new PublishOptionsBuilder with default values.
-    pub fn new() -> Self {
+    /// Creates a new `PublishOptionsBuilder` with default values.
+    #[must_use]
+    pub const fn new() -> Self {
         Self {
             ttl: None,
             priority: None,
@@ -275,35 +291,44 @@ impl PublishOptionsBuilder {
     }
 
     /// Sets the time-to-live duration for the message.
-    pub fn ttl(mut self, duration: Duration) -> Self {
+    #[must_use]
+    pub const fn ttl(mut self, duration: Duration) -> Self {
         self.ttl = Some(duration);
         self
     }
 
     /// Sets a delay before the message is published.
-    pub fn delay(mut self, duration: Duration) -> Self {
+    #[must_use]
+    pub const fn delay(mut self, duration: Duration) -> Self {
         self.delay = Some(duration);
         self
     }
 
     /// Sets a specific time for the message to be published.
-    pub fn schedule_at(mut self, time: OffsetDateTime) -> Self {
+    #[must_use]
+    pub const fn schedule_at(mut self, time: OffsetDateTime) -> Self {
         self.scheduled_at = Some(time);
         self
     }
 
     /// Sets the priority level for the message. This is a number between 1 and 5, where 5 is the lowest priority and 1 is the highest.
+    ///
+    /// # Panics
+    /// Panics if the priority is not between 1 and 5.
+    #[must_use]
     pub fn priority(mut self, priority: u8) -> Self {
-        if !(1..=5).contains(&priority) {
-            panic!("Priority must be between 1 and 5");
-        }
+        assert!(
+            (1..=5).contains(&priority),
+            "Priority must be between 1 and 5"
+        );
 
         self.priority = Some(priority);
         self
     }
 
-    /// Builds the PublishOptions with the configured values.
-    pub fn build(self) -> PublishOptions {
+    /// Builds the `PublishOptions` with the configured values.
+    #[must_use]
+    pub const fn build(self) -> PublishOptions {
         PublishOptions {
             ttl: self.ttl,
             priority: self.priority,
@@ -315,7 +340,7 @@ impl PublishOptionsBuilder {
 
 /// Main queue interface for interacting with the message broker.
 ///
-/// BroccoliQueue provides methods for publishing and consuming messages,
+/// `BroccoliQueue` provides methods for publishing and consuming messages,
 /// as well as processing messages with custom handlers.
 pub struct BroccoliQueue {
     /// The underlying message broker implementation
@@ -350,6 +375,9 @@ impl BroccoliQueue {
     ///
     /// # Returns
     /// A `Result` indicating success or failure.
+    ///
+    /// # Errors
+    /// If the message fails to publish, a `BroccoliError` will be returned.
     pub async fn publish<T: Clone + serde::Serialize + serde::de::DeserializeOwned>(
         &self,
         topic: &str,
@@ -363,11 +391,9 @@ impl BroccoliQueue {
             .broker
             .publish(topic, disambiguator, &[message.into()], options)
             .await
-            .map_err(|e| BroccoliError::Publish(format!("Failed to publish message: {:?}", e)))?
+            .map_err(|e| BroccoliError::Publish(format!("Failed to publish message: {e:?}")))?
             .pop()
-            .ok_or(BroccoliError::Publish(
-                "Failed to publish message".to_string(),
-            ))?;
+            .ok_or_else(|| BroccoliError::Publish("Failed to publish message".to_string()))?;
 
         message.into_message()
     }
@@ -380,6 +406,9 @@ impl BroccoliQueue {
     ///
     /// # Returns
     /// A `Result` indicating success or failure.
+    ///
+    /// # Errors
+    /// If the messages fail to publish, a `BroccoliError` will be returned.
     pub async fn publish_batch<T: Clone + serde::Serialize + serde::de::DeserializeOwned>(
         &self,
         topic: &str,
@@ -401,7 +430,7 @@ impl BroccoliQueue {
             .broker
             .publish(topic, disambiguator, &internal_messages, options)
             .await
-            .map_err(|e| BroccoliError::Publish(format!("Failed to publish messages: {:?}", e)))?;
+            .map_err(|e| BroccoliError::Publish(format!("Failed to publish messages: {e:?}")))?;
 
         messages
             .into_iter()
@@ -418,15 +447,19 @@ impl BroccoliQueue {
     ///
     /// # Returns
     /// A `Result` containing the consumed message, or a `BroccoliError` on failure.
+    ///
+    /// # Errors
+    /// If the message fails to consume, a `BroccoliError` will be returned.
     pub async fn consume<T: Clone + serde::Serialize + serde::de::DeserializeOwned>(
         &self,
         topic: &str,
         options: Option<ConsumeOptions>,
     ) -> Result<BrokerMessage<T>, BroccoliError> {
-        let message =
-            self.broker.consume(topic, options).await.map_err(|e| {
-                BroccoliError::Consume(format!("Failed to consume message: {:?}", e))
-            })?;
+        let message = self
+            .broker
+            .consume(topic, options)
+            .await
+            .map_err(|e| BroccoliError::Consume(format!("Failed to consume message: {e:?}")))?;
 
         message.into_message()
     }
@@ -442,6 +475,9 @@ impl BroccoliQueue {
     ///
     /// # Returns
     /// A `Result` containing a vector of consumed messages, or a `BroccoliError` on failure.
+    ///
+    /// # Errors
+    /// If the messages fail to consume, a `BroccoliError` will be returned.
     pub async fn consume_batch<T: Clone + serde::Serialize + serde::de::DeserializeOwned>(
         &self,
         topic: &str,
@@ -470,15 +506,19 @@ impl BroccoliQueue {
     ///
     /// # Returns
     /// A `Result` containing an `Option` with the consumed message if available, or a `BroccoliError` on failure.
+    ///
+    /// # Errors
+    /// If the message fails to consume, a `BroccoliError` will be returned.
     pub async fn try_consume<T: Clone + serde::Serialize + serde::de::DeserializeOwned>(
         &self,
         topic: &str,
         options: Option<ConsumeOptions>,
     ) -> Result<Option<BrokerMessage<T>>, BroccoliError> {
-        let serialized_message =
-            self.broker.try_consume(topic, options).await.map_err(|e| {
-                BroccoliError::Consume(format!("Failed to consume message: {:?}", e))
-            })?;
+        let serialized_message = self
+            .broker
+            .try_consume(topic, options)
+            .await
+            .map_err(|e| BroccoliError::Consume(format!("Failed to consume message: {e:?}")))?;
 
         if let Some(message) = serialized_message {
             Ok(Some(message.into_message()?))
@@ -495,6 +535,9 @@ impl BroccoliQueue {
     ///
     /// # Returns
     /// A `Result` indicating success or failure.
+    ///
+    /// # Errors
+    /// If the message fails to acknowledge, a `BroccoliError` will be returned.
     pub async fn acknowledge<T: Clone + serde::Serialize + serde::de::DeserializeOwned>(
         &self,
         topic: &str,
@@ -504,7 +547,7 @@ impl BroccoliQueue {
             .acknowledge(topic, message.into())
             .await
             .map_err(|e| {
-                BroccoliError::Acknowledge(format!("Failed to acknowledge message: {:?}", e))
+                BroccoliError::Acknowledge(format!("Failed to acknowledge message: {e:?}"))
             })?;
 
         Ok(())
@@ -518,6 +561,9 @@ impl BroccoliQueue {
     ///
     /// # Returns
     /// A `Result` indicating success or failure.
+    ///
+    /// # Errors
+    /// If the message fails to reject, a `BroccoliError` will be returned.
     pub async fn reject<T: Clone + serde::Serialize + serde::de::DeserializeOwned>(
         &self,
         topic: &str,
@@ -526,7 +572,7 @@ impl BroccoliQueue {
         self.broker
             .reject(topic, message.into())
             .await
-            .map_err(|e| BroccoliError::Reject(format!("Failed to reject message: {:?}", e)))?;
+            .map_err(|e| BroccoliError::Reject(format!("Failed to reject message: {e:?}")))?;
 
         Ok(())
     }
@@ -539,11 +585,14 @@ impl BroccoliQueue {
     ///
     /// # Returns
     /// A `Result` indicating success or failure.
+    ///
+    /// # Errors
+    /// If the message fails to cancel, a `BroccoliError` will be returned.
     pub async fn cancel(&self, topic: &str, message_id: String) -> Result<(), BroccoliError> {
         self.broker
             .cancel(topic, message_id)
             .await
-            .map_err(|e| BroccoliError::Cancel(format!("Failed to cancel message: {:?}", e)))?;
+            .map_err(|e| BroccoliError::Cancel(format!("Failed to cancel message: {e:?}")))?;
 
         Ok(())
     }
@@ -587,6 +636,9 @@ impl BroccoliQueue {
     ///
     /// # Returns
     /// A `Result` indicating success or failure.
+    ///
+    /// # Errors
+    /// If the message fails to process, a `BroccoliError` will be returned.
     pub async fn process_messages<T, F, Fut>(
         &self,
         topic: &str,
@@ -599,12 +651,12 @@ impl BroccoliQueue {
         F: Fn(BrokerMessage<T>) -> Fut + Send + Sync + Clone + 'static,
         Fut: Future<Output = Result<(), BroccoliError>> + Send + 'static,
     {
-        let handles = FuturesUnordered::new();
+        let future_handles = FuturesUnordered::new();
         let consume_options = consume_options.clone();
 
         loop {
             if let Some(concurrency) = concurrency {
-                while handles.len() < concurrency {
+                while future_handles.len() < concurrency {
                     let broker = Arc::clone(&self.broker);
                     let topic = topic.to_string();
                     let handler = handler.clone();
@@ -620,14 +672,12 @@ impl BroccoliQueue {
                                 });
 
                             if let Ok(message) = message {
-                                let broker_message = if let Ok(msg) = message.into_message() {
-                                    msg
-                                } else {
+                                let Ok(broker_message) = message.into_message() else {
                                     log::error!("Failed to deserialize message");
                                     continue;
                                 };
                                 match handler(broker_message).await {
-                                    Ok(_) => {
+                                    Ok(()) => {
                                         // Message processed successfully
                                         let _ = broker.acknowledge(&topic, message).await.map_err(
                                             |e| {
@@ -652,7 +702,7 @@ impl BroccoliQueue {
                         }
                     });
 
-                    handles.push(handle);
+                    future_handles.push(handle);
                 }
             } else {
                 let message = self
@@ -661,11 +711,11 @@ impl BroccoliQueue {
                     .await
                     .map_err(|e| {
                         log::error!("Failed to consume message: {:?}", e);
-                        BroccoliError::Consume(format!("Failed to consume message: {:?}", e))
+                        BroccoliError::Consume(format!("Failed to consume message: {e:?}"))
                     })?;
 
                 match handler(message.into_message()?).await {
-                    Ok(_) => {
+                    Ok(()) => {
                         // Message processed successfully
                         let _ = self.broker.acknowledge(topic, message).await.map_err(|e| {
                             log::error!("Failed to acknowledge message: {:?}", e);
@@ -744,6 +794,9 @@ impl BroccoliQueue {
     ///
     /// # Returns
     /// A `Result` indicating success or failure.
+    ///
+    /// # Errors
+    /// If the message fails to process, a `BroccoliError` will be returned.
     pub async fn process_messages_with_handlers<T, F, MessageFut, SuccessFut, ErrorFut, S, E>(
         &self,
         topic: &str,
@@ -785,35 +838,36 @@ impl BroccoliQueue {
                                 });
 
                             if let Ok(message) = message {
-                                let broker_message = if let Ok(msg) = message.into_message() {
-                                    msg
-                                } else {
+                                let Ok(broker_message) = message.into_message() else {
                                     log::error!("Failed to deserialize message");
                                     continue;
                                 };
                                 match message_handler(broker_message.clone()).await {
-                                    Ok(_) => {
+                                    Ok(()) => {
                                         let _ = on_success(broker_message).await.map_err(|e| {
                                             log::error!(
                                                 "Success Handler to process message: {:?}",
                                                 e
-                                            )
+                                            );
                                         });
                                         let _ = broker.acknowledge(&topic, message).await.map_err(
                                             |e| {
                                                 log::error!(
                                                     "Failed to acknowledge message: {:?}",
                                                     e
-                                                )
+                                                );
                                             },
                                         );
                                     }
                                     Err(e) => {
                                         let _ = on_error(broker_message, e).await.map_err(|e| {
-                                            log::error!("Error Handler to process message: {:?}", e)
+                                            log::error!(
+                                                "Error Handler to process message: {:?}",
+                                                e
+                                            );
                                         });
                                         let _ = broker.reject(&topic, message).await.map_err(|e| {
-                                            log::error!("Failed to reject message: {:?}", e)
+                                            log::error!("Failed to reject message: {:?}", e);
                                         });
                                     }
                                 }
@@ -833,13 +887,13 @@ impl BroccoliQueue {
                     .await
                     .map_err(|e| {
                         log::error!("Failed to consume message: {:?}", e);
-                        BroccoliError::Consume(format!("Failed to consume message: {:?}", e))
+                        BroccoliError::Consume(format!("Failed to consume message: {e:?}"))
                     })?;
 
                 match message_handler(message.into_message()?).await {
-                    Ok(_) => {
+                    Ok(()) => {
                         let _ = on_success(message.into_message()?).await.map_err(|e| {
-                            log::error!("Success Handler to process message: {:?}", e)
+                            log::error!("Success Handler to process message: {:?}", e);
                         });
                         let _ = self
                             .broker

@@ -1,5 +1,6 @@
 use broccoli_queue::queue::ConsumeOptions;
-use broccoli_queue::queue::{ConsumeOptionsBuilder, PublishOptions};
+use broccoli_queue::queue::ConsumeOptionsBuilder;
+use broccoli_queue::queue::PublishOptions;
 #[cfg(feature = "redis")]
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
@@ -65,7 +66,7 @@ async fn test_empty_payload() {
         #[cfg(feature = "test-fairness")]
         let queue_name = format!("{}_job-1_queue", test_topic);
 
-        let queue_len: usize = redis.zcard(&queue_name).await.unwrap();
+        let queue_len: usize = redis.zcard(queue_name).await.unwrap();
         assert_eq!(queue_len, 0, "Queue should be empty after consuming");
     }
 }
@@ -192,7 +193,7 @@ async fn test_concurrent_consume() {
         let queue_name = format!("{}_job-1_queue", test_topic);
 
         // Verify remaining message count
-        let remaining: usize = redis.zcard(queue_name.clone()).await.unwrap();
+        let remaining: usize = redis.zcard(queue_name).await.unwrap();
         assert_eq!(remaining, 5, "Should have 5 messages remaining");
 
         #[cfg(not(feature = "test-fairness"))]
@@ -417,7 +418,7 @@ async fn test_message_ordering() {
         let queue_name = format!("{}_job-1_queue", test_topic);
 
         let scores: Vec<(String, f64)> = redis
-            .zrangebyscore_withscores(&queue_name, "-inf", "+inf")
+            .zrangebyscore_withscores(queue_name, "-inf", "+inf")
             .await
             .unwrap();
 
