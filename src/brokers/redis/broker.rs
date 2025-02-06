@@ -165,7 +165,6 @@ impl Broker for RedisBroker {
             );
 
             let disambiguator_str = disambiguator.clone().unwrap_or_default();
-            println!("disambiguator_str: {:?}", disambiguator_str);
 
             script
                 .key(queue_name)
