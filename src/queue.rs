@@ -572,7 +572,7 @@ impl BroccoliQueue {
     ///       .await
     ///       .unwrap();
     ///
-    ///   queue.process_messages("jobs", None, |message: BrokerMessage<JobPayload>| async move {
+    ///   queue.process_messages("jobs", None, None, |message: BrokerMessage<JobPayload>| async move {
     ///         println!("Received message: {:?}", message);
     ///         Ok(())
     ///     }).await.unwrap();
@@ -727,6 +727,7 @@ impl BroccoliQueue {
     ///     queue.process_messages_with_handlers(
     ///         "jobs",
     ///         Some(3),
+    ///         None,    
     ///         process_message,
     ///         on_success,
     ///         on_error

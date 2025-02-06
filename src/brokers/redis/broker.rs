@@ -136,45 +136,45 @@ impl Broker for RedisBroker {
                 }
             }
 
-            let queue_name = if let Some(ref disambiguator) = disambiguator {
-                format!("{}_{}_queue", queue_name, disambiguator)
-            } else {
-                queue_name.to_string()
-            };
+            let script = redis::Script::new(
+                r#"
+                local base_queue_name = KEYS[1]
+                local task_id = ARGV[1]
+                local score = tonumber(ARGV[2])
+                local priority = tonumber(ARGV[3])
+                local disambiguator = ARGV[4]
 
-            redis_connection
-                .zadd::<String, i64, &str, String>(
-                    queue_name,
-                    &msg.task_id.to_string(),
-                    priority * score,
-                )
+                local queue_name = base_queue_name
+                if disambiguator ~= '' then
+                    queue_name = string.format("%s_%s_queue", base_queue_name, disambiguator)
+                end
+
+                redis.call('ZADD', queue_name, priority * score, task_id)
+
+                if disambiguator ~= '' then
+                    local fairness_set = string.format("%s_fairness_set", base_queue_name)
+                    local fairness_round_robin = string.format("%s_fairness_round_robin", base_queue_name)
+                    local exists_in_tracking_set = redis.call('SISMEMBER', fairness_set, disambiguator)
+
+                    if exists_in_tracking_set == 0 then
+                        redis.call('SADD', fairness_set, disambiguator)
+                        redis.call('RPUSH', fairness_round_robin, disambiguator)
+                    end
+                end
+            "#,
+            );
+
+            let disambiguator_str = disambiguator.clone().unwrap_or_default();
+            println!("disambiguator_str: {:?}", disambiguator_str);
+
+            script
+                .key(queue_name)
+                .arg(&msg.task_id)
+                .arg(score)
+                .arg(priority)
+                .arg(&disambiguator_str)
+                .invoke_async::<()>(&mut redis_connection)
                 .await?;
-        }
-
-        if disambiguator.is_some() {
-            if let Some(ref disambiguator) = disambiguator {
-                let exists_in_tracking_set = redis_connection
-                    .sismember::<String, &str, bool>(
-                        format!("{}_fairness_set", queue_name),
-                        disambiguator,
-                    )
-                    .await?;
-
-                if !exists_in_tracking_set {
-                    redis_connection
-                        .sadd::<String, &str, ()>(
-                            format!("{}_fairness_set", queue_name),
-                            disambiguator,
-                        )
-                        .await?;
-                    redis_connection
-                        .rpush::<String, &str, ()>(
-                            format!("{}_fairness_round_robin", queue_name),
-                            disambiguator,
-                        )
-                        .await?;
-                }
-            }
         }
 
         Ok(messages.to_vec())
