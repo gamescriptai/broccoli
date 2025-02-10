@@ -27,7 +27,7 @@ pub trait Broker: Send + Sync {
     /// A `Result` indicating success or failure.
     async fn publish(
         &self,
-        queue_name: &'static str,
+        queue_name: &str,
         message: &[InternalBrokerMessage],
         options: Option<PublishOptions>,
     ) -> Result<Vec<InternalBrokerMessage>, BroccoliError>;
@@ -42,7 +42,7 @@ pub trait Broker: Send + Sync {
     /// if no message is avaiable, and a `BroccoliError` on failure.
     async fn try_consume(
         &self,
-        queue_name: &'static str,
+        queue_name: &str,
         options: Option<ConsumeOptions>,
     ) -> Result<Option<InternalBrokerMessage>, BroccoliError>;
 
@@ -55,7 +55,7 @@ pub trait Broker: Send + Sync {
     /// A `Result` containing the message as a `String`, or a `BroccoliError` on failure.
     async fn consume(
         &self,
-        queue_name: &'static str,
+        queue_name: &str,
         options: Option<ConsumeOptions>,
     ) -> Result<InternalBrokerMessage, BroccoliError>;
 
@@ -69,7 +69,7 @@ pub trait Broker: Send + Sync {
     /// A `Result` indicating success or failure.
     async fn acknowledge(
         &self,
-        queue_name: &'static str,
+        queue_name: &str,
         message: InternalBrokerMessage,
     ) -> Result<(), BroccoliError>;
 
@@ -83,7 +83,7 @@ pub trait Broker: Send + Sync {
     /// A `Result` indicating success or failure.
     async fn reject(
         &self,
-        queue_name: &'static str,
+        queue_name: &str,
         message: InternalBrokerMessage,
     ) -> Result<(), BroccoliError>;
 
@@ -95,14 +95,11 @@ pub trait Broker: Send + Sync {
     ///
     /// # Returns
     /// A `Result` indicating success or failure.
-    async fn cancel(
-        &self,
-        queue_name: &'static str,
-        message_id: String,
-    ) -> Result<(), BroccoliError>;
+    async fn cancel(&self, queue_name: &str, message_id: String) -> Result<(), BroccoliError>;
 }
 
 /// Configuration options for broker behavior.
+#[derive(Debug, Clone)]
 pub struct BrokerConfig {
     /// Maximum number of retry attempts for failed messages
     pub retry_attempts: Option<u8>,

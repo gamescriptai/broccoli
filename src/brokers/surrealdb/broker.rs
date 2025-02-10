@@ -1,10 +1,13 @@
+use lazy_static::lazy_static;
+use std::str::FromStr;
+
 use crate::{
     brokers::broker::{Broker, BrokerConfig, InternalBrokerMessage},
     error::BroccoliError,
     queue::{ConsumeOptions, PublishOptions},
 };
 
-use surrealdb::{engine::any::Any, RecordId};
+use surrealdb::{engine::any::Any, RecordId, Value};
 use surrealdb::{Notification, Surreal};
 use time::Duration;
 
@@ -34,18 +37,31 @@ pub(crate) struct InternalSurrealDBBrokerMessage {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct InternalSurrealDBBrokerQueuedMessageRecord {
+    pub(crate) id: RecordId, // this is the queue record id [timestamp, message id]
+    pub(crate) message_id: RecordId, // this is the message id: queue_name:task_id
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct InternalSurrealDBBrokerQueuedMessage {
-    pub(crate) message_id: RecordId,
+    pub(crate) message_id: RecordId, // this is the message id: queue_name:task_id
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct InternalSurrealDBBrokerProcessingMessage {
-    pub(crate) message_id: RecordId,
+    pub(crate) message_id: RecordId, // this is the message id: queue_name:task_id
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct InternalSurrealDBBrokerFailedMessage {
-    pub(crate) original_msg: InternalSurrealDBBrokerMessage,
+    pub(crate) original_msg: InternalSurrealDBBrokerMessage, // full original message
+}
+
+// consumer lock
+lazy_static! {
+    // TODO: to improve performance we could have a hash table of mutexes, or sharding
+    static ref consume_mutex: std::sync::Arc<tokio::sync::Mutex<u8>> =
+        std::sync::Arc::new(tokio::sync::Mutex::new(0));
 }
 
 /// Implementation of the `Broker` trait for `SurrealDBBroker`.
@@ -83,15 +99,15 @@ impl Broker for SurrealDBBroker {
     /// A `Result` indicating success or failure.
     async fn publish(
         &self,
-        queue_name: &'static str,
+        queue_name: &str,
         messages: &[InternalBrokerMessage],
         publish_options: Option<PublishOptions>,
     ) -> Result<Vec<InternalBrokerMessage>, BroccoliError> {
-        self.check_connected()?;
+        let db = self.check_connected()?;
 
         let publish_options = publish_options.unwrap_or_default();
+        let config = self.config.clone().unwrap_or_default();
         let priority = publish_options.priority.unwrap_or(5) as i64;
-
         if !(1..=5).contains(&priority) {
             return Err(BroccoliError::Broker(
                 "Priority must be between 1 and 5".to_string(),
@@ -99,30 +115,20 @@ impl Broker for SurrealDBBroker {
         }
         let _priority_str = priority.to_string();
         // if we have a delay and scheduling is enabled
-        let delay: Option<Duration> = self
-            .config
-            .as_ref()
-            .map(|c| {
-                c.enable_scheduling
-                    .map_or_else(|| None, |_| publish_options.delay)
-            })
-            .unwrap();
-        let scheduled_at: Option<time::OffsetDateTime> = self
-            .config
-            .as_ref()
-            .map(|c| {
-                c.enable_scheduling
-                    .map_or_else(|| None, |_| publish_options.scheduled_at)
-            })
-            .unwrap();
+        let delay: Option<Duration> = if config.enable_scheduling.is_some() {
+            publish_options.delay
+        } else {
+            None
+        };
+        let scheduled_at: Option<time::OffsetDateTime> = if config.enable_scheduling.is_some() {
+            publish_options.scheduled_at
+        } else {
+            None
+        };
         let mut published: Vec<InternalBrokerMessage> = Vec::new();
         for msg in messages {
             // TODO: look into priority
 
-            let db = <std::option::Option<Surreal<surrealdb::engine::any::Any>> as Clone>::clone(
-                &self.db,
-            )
-            .unwrap();
             // 1: insert actual message //
             let inserted =
                 utils::add_message(&db, queue_name, &msg, "Could not publish (add msg)").await?;
@@ -134,21 +140,21 @@ impl Broker for SurrealDBBroker {
                     .await?;
             } else {
                 // we either have a delay or a schedule, schedule takes priority
-                if scheduled_at.is_some() {
+                if let Some(when) = scheduled_at {
                     utils::add_to_queue_scheduled(
                         &db,
                         queue_name,
                         &msg.task_id,
-                        scheduled_at.unwrap(),
+                        when,
                         "Could not publish scheduled (enqueue)",
                     )
                     .await?
-                } else {
+                } else if let Some(when) = delay {
                     utils::add_to_queue_delayed(
                         &db,
                         queue_name,
                         &msg.task_id,
-                        delay.unwrap(),
+                        when,
                         "Could not publish delayed (enqueue)",
                     )
                     .await?
@@ -168,59 +174,57 @@ impl Broker for SurrealDBBroker {
     /// if no message is avaiable, and a `BroccoliError` on failure.
     async fn try_consume(
         &self,
-        queue_name: &'static str,
+        queue_name: &str,
         options: Option<ConsumeOptions>,
     ) -> Result<Option<InternalBrokerMessage>, BroccoliError> {
-        self.check_connected()?;
+        let db = self.check_connected()?;
 
-        let db =
-            <std::option::Option<Surreal<surrealdb::engine::any::Any>> as Clone>::clone(&self.db)
-                .unwrap();
+        //////// CRITICAL AREA START //////
+        let _lock = consume_mutex.lock().await;
 
         //// 1: get message from queue ////
-        // unfortunately cannot have a surrealdb session open haven an open transaction
         let queued_message =
             utils::get_queued(&db, queue_name, "Could not try consume (get queued)").await?;
-        if queued_message.is_none() {
-            return Ok(None);
-        }
-        let queued_message = queued_message.unwrap();
+        match queued_message {
+            Some(queued_message) => {
+                //// 2: delete it from queue ////
+                utils::remove_from_queue(
+                    &db,
+                    queue_name,
+                    queued_message.id.clone(),
+                    "Could not try consume (removing from queue)",
+                )
+                .await?;
 
-        //// 2: delete it from queue ////
-        let queued_msg_id = queued_message.message_id;
-        utils::remove_from_queue(
-            &db,
-            queue_name,
-            queued_msg_id.clone(),
-            "Could not try consume (removing from queue)",
-        )
-        .await?;
+                //// 3: if not autoack then add it to processing ////
+                let auto_ack = options.is_some_and(|x| x.auto_ack.unwrap_or(false));
+                if !auto_ack {
+                    //// 4: add to processing queue ////
+                    utils::add_to_processing(
+                        &db,
+                        queue_name,
+                        queued_message.clone(),
+                        "Could not try consume (add to processing)",
+                    )
+                    .await?;
+                }
 
-        //// 3: if not autoack then add it to processing ////
-        let auto_ack = options.is_some_and(|x| x.auto_ack.unwrap_or(false));
-        if !auto_ack {
-            //// 4: add to processing queue ////
-            utils::add_to_processing(
-                &db,
-                queue_name,
-                queued_msg_id.clone(),
-                "Could not try consume (add to processing)",
-            )
-            .await?;
+                //// 4: return the actual payload ////
+                let msg = utils::get_message_from(
+                    &db,
+                    queue_name,
+                    queued_message,
+                    "Could not try consume (get actual message)",
+                )
+                .await;
+                match msg {
+                    Ok(msg) => Ok(Some(msg)),
+                    Err(e) => Err(e),
+                }
+            }
+            None => Ok(None),
         }
-
-        //// 4: return the actual payload ////
-        let msg = utils::get_message(
-            &db,
-            queued_msg_id,
-            "Could not try consume (get actual message)",
-        )
-        .await;
-        if msg.is_ok() {
-            Ok(Some(msg.unwrap()))
-        } else {
-            Err(msg.err().unwrap())
-        }
+        //////// CRITICAL AREA ENDS //////
     }
 
     /// Consumes a message from the specified queue, blocking until a message is available.
@@ -233,66 +237,63 @@ impl Broker for SurrealDBBroker {
     /// A `Result` containing the message as a `String`, or a `BroccoliError` on failure.
     async fn consume(
         &self,
-        queue_name: &'static str,
+        queue_name: &str,
         options: Option<ConsumeOptions>,
     ) -> Result<InternalBrokerMessage, BroccoliError> {
         // first of all, we try to consume without blocking, and return if we have messages
         let resp = Self::try_consume(&self, queue_name, options).await?;
-        if resp.is_some() {
-            return Ok(resp.unwrap());
+        if let Some(message) = resp {
+            return Ok(message);
         }
 
-        // if there were no messages, we block and wait
-        self.check_connected()?;
-        let db =
-            <std::option::Option<Surreal<surrealdb::engine::any::Any>> as Clone>::clone(&self.db);
-
-        let mut stream =
-            db.unwrap()
-                .select(queue_name)
-                .live()
-                .await
-                .map_err(|err: surrealdb::Error| {
-                    BroccoliError::Broker(format!("Could not consume: {:?}", err))
-                })?;
-
-        // let msg: Arc<Result<InternalBrokerMessage, BroccoliError>> = Arc::new();
-        // let msg = Arc::new(Mutex::new(Err(BroccoliError::NotImplemented)));
-        let mut msg: Result<InternalBrokerMessage, BroccoliError> =
+        // if there were no messages, we block using a live query and wait
+        let db = self.check_connected()?;
+        let queue_table = utils::queue_table(queue_name);
+        let mut stream = db
+            .select(queue_table)
+            .range(
+                vec![Value::default(), Value::default()] // note default is 'None'
+                ..vec![Value::from_str("time::now()").unwrap_or(Value::default()),Value::default()],
+            ) // should notify when future becomes present
+            .live()
+            .await
+            .map_err(|err| BroccoliError::Broker(format!("Could not consume: {:?}", err)))?;
+        let mut queued_message: Result<InternalSurrealDBBrokerQueuedMessageRecord, BroccoliError> =
             Err(BroccoliError::NotImplemented);
         // this should block in theory
         while let Some(notification) = futures::StreamExt::next(&mut stream).await {
-            // we have a notification, we decide if it's relevant (create) and if it's not an element scheduled in the future
-            let payload: Option<Result<InternalBrokerMessage, BroccoliError>> = match notification {
-                Ok(notification) => {
-                    let notification: Notification<InternalBrokerMessage> = notification;
-                    let payload = notification.data;
-                    match notification.action {
-                        surrealdb::Action::Create => {
-                            eprintln!("********** Created record **********");
-                            Some(Ok(payload))
+            // we have a notification and exit the loop if it's a create
+            let payload: Option<Result<InternalSurrealDBBrokerQueuedMessageRecord, BroccoliError>> =
+                match notification {
+                    Ok(notification) => {
+                        let notification: Notification<InternalSurrealDBBrokerQueuedMessageRecord> =
+                            notification;
+                        let payload = notification.data;
+                        match notification.action {
+                            surrealdb::Action::Create => Some(Ok(payload)),
+                            _ => None,
                         }
-                        surrealdb::Action::Update => {
-                            eprintln!("********** Updated record **********");
-                            None
-                        }
-                        _ => None,
                     }
-                }
-                Err(error) => Some(Err(BroccoliError::Broker(format!(
-                    "Could not consume: {:?}",
-                    error
-                )))),
-            };
-            if payload.is_some() {
-                msg = payload.unwrap();
+                    Err(error) => Some(Err(BroccoliError::Broker(format!(
+                        "Could not consume::'{}' {}",
+                        queue_name, error
+                    )))),
+                };
+            if let Some(message) = payload {
+                queued_message = message;
                 break;
             }
         }
-        msg
-        // The returned stream implements `futures::Stream` so we can
-        // use it with `futures::StreamExt`, for example.
-        //while let Some(notification) = stream.next().await {}
+        match queued_message {
+            Ok(message) => Ok(utils::get_message_from(
+                &db,
+                queue_name,
+                message,
+                "Could not consume (retrieving message) ",
+            )
+            .await?),
+            Err(e) => Err(e),
+        }
     }
 
     /// Acknowledges the processing of a message, removing it from the processing queue.
@@ -305,15 +306,13 @@ impl Broker for SurrealDBBroker {
     /// A `Result` indicating success or failure.
     async fn acknowledge(
         &self,
-        queue_name: &'static str,
+        queue_name: &str,
         message: InternalBrokerMessage,
     ) -> Result<(), BroccoliError> {
-        let db =
-            <std::option::Option<Surreal<surrealdb::engine::any::Any>> as Clone>::clone(&self.db)
-                .unwrap();
+        let db = self.check_connected()?;
 
         // 1: remove from processing queue
-        utils::remove_from_processing(
+        let processing = utils::remove_from_processing(
             &db,
             queue_name,
             &message.task_id,
@@ -325,6 +324,7 @@ impl Broker for SurrealDBBroker {
         utils::remove_message(
             &db,
             queue_name,
+            processing.message_id,
             &message.task_id,
             "Could not acknowledge (remove message)",
         )
@@ -343,14 +343,10 @@ impl Broker for SurrealDBBroker {
     /// A `Result` indicating success or failure.
     async fn reject(
         &self,
-        queue_name: &'static str,
+        queue_name: &str,
         message: InternalBrokerMessage,
     ) -> Result<(), BroccoliError> {
-        self.check_connected()?;
-
-        let db =
-            <std::option::Option<Surreal<surrealdb::engine::any::Any>> as Clone>::clone(&self.db)
-                .unwrap();
+        let db = self.check_connected()?;
 
         let attempts = message.attempts + 1;
 
@@ -375,13 +371,25 @@ impl Broker for SurrealDBBroker {
                 .map(|config| config.retry_failed.unwrap_or(true))
                 .unwrap_or(true)
         {
-            let msg =
-                utils::get_message(&db, rejected.message_id, "Could not reject (get original)")
-                    .await?;
+            let msg = utils::get_message(
+                &db,
+                queue_name,
+                rejected.message_id.clone(),
+                "Could not reject (get original)",
+            )
+            .await?;
             //// 2: add to failed if excceded all attempts ////
             utils::add_to_failed(&db, queue_name, msg, "Could not reject (adding to failed)")
                 .await?;
-
+            //// 4: we nuke the old message ////
+            utils::remove_message(
+                &db,
+                queue_name,
+                rejected.message_id,
+                &message.task_id,
+                "Could not reject (removing message)",
+            )
+            .await?;
             log::error!(
                 "Message {} has reached max attempts and has been pushed to failed queue",
                 message.task_id
@@ -395,7 +403,7 @@ impl Broker for SurrealDBBroker {
             .unwrap_or(true)
         {
             // TODO: handle priority here
-            //// 3: if retry is configured, we increase attempts ////
+            //// 4: if retry is configured, we increase attempts ////
             let mut message = message;
             message.attempts = attempts;
             let task_id = message.task_id.clone();
@@ -416,33 +424,33 @@ impl Broker for SurrealDBBroker {
     ///
     /// # Returns
     /// A `Result` indicating success or failure.
-    async fn cancel(
-        &self,
-        queue_name: &'static str,
-        message_id: String,
-    ) -> Result<(), BroccoliError> {
-        self.check_connected()?;
+    async fn cancel(&self, queue_name: &str, task_id: String) -> Result<(), BroccoliError> {
+        let db = self.check_connected()?;
 
-        let db =
-            <std::option::Option<Surreal<surrealdb::engine::any::Any>> as Clone>::clone(&self.db)
-                .unwrap();
-
-        //// 1: remove from queue ////
-        utils::remove_from_queue_str(
+        //// 1: remove from queue using the index ////
+        let queued = utils::remove_queued_from_index(
             &db,
             queue_name,
-            &message_id,
-            "Could not cancel (remove from queue)",
+            &task_id,
+            "Could not cancel (remove from queue using index)",
         )
         .await?;
-
-        //// 2: remove message  ////
-        utils::remove_message(
-            &db,
-            queue_name,
-            &message_id,
-            "Could not cancel (remove actual message)",
-        )
-        .await
+        match queued {
+            Some(queued) => {
+                //// 2: remove the actual message  ////
+                utils::remove_message(
+                    &db,
+                    queue_name,
+                    queued.message_id,
+                    &task_id,
+                    "Could not cancel (remove actual message)",
+                )
+                .await
+            }
+            None => Err(BroccoliError::Broker(format!(
+                "Could not cancel (task_id not found):{}:{}",
+                queue_name, task_id
+            ))),
+        }
     }
 }

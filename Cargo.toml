@@ -31,6 +31,7 @@ redis = { version = "0.27.5", features = [
 dashmap = "6.1.0"
 surrealdb = { version = "2.0.4", optional = true }
 url = { version = "2.5.4", optional = true } 
+lazy_static = { version = "1.5.0", optional = true}
 
 [dev-dependencies]
 tokio = { version = "1.42.0", features = ["full"] }
@@ -43,7 +44,7 @@ criterion = { version = "0.5", features = ["async_tokio"] }
 default = []
 redis = ["dep:bb8-redis", "dep:redis"]
 rabbitmq = ["dep:lapin", "dep:deadpool", "dep:deadpool-lapin"]
-surrealdb = ["dep:surrealdb", "dep:url"]
+surrealdb = ["dep:surrealdb", "dep:url", "dep:lazy_static"]
 
 [[bench]]
 name = "queue_benchmark"

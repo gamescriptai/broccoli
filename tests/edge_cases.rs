@@ -57,7 +57,6 @@ async fn test_very_large_payload() {
     assert_eq!(consumed.payload.content.len(), large_content.len());
 }
 
-#[cfg(not(feature = "surrealdb"))]
 #[tokio::test]
 async fn test_concurrent_consume() {
     let queue = common::setup_queue().await;
@@ -80,8 +79,8 @@ async fn test_concurrent_consume() {
     let mut handles = vec![];
     for _ in 0..5 {
         let queue_clone = queue.clone();
-        let topic = test_topic.to_string();
         handles.push(tokio::spawn(async move {
+            let topic = test_topic.to_string();
             let msg = queue_clone
                 .consume::<TestMessage>(&topic, Default::default())
                 .await
