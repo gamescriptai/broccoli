@@ -208,7 +208,8 @@ impl Broker for SurrealDBBroker {
                     "Could not try consume (removing from queue)",
                 )
                 .await?;
-                // TODO: release lock here to increase performance !!!
+                let _lock: Option<u8> = None;
+                //////// CRITICAL AREA ENDS (Some branch) //////
 
                 //// 3: if not autoack then add it to processing ////
                 let auto_ack = options.is_some_and(|x| x.auto_ack.unwrap_or(false));
@@ -236,9 +237,8 @@ impl Broker for SurrealDBBroker {
                     Err(e) => Err(e),
                 }
             }
-            None => Ok(None),
+            None => Ok(None), //////// CRITICAL AREA ENDS (None branch) //////
         }
-        //////// CRITICAL AREA ENDS //////
     }
 
     /// Consumes a message from the specified queue, blocking until a message is available.
