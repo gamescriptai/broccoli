@@ -186,6 +186,26 @@ async fn test_concurrent_consume() {
     assert_eq!(unique_ids.len(), 5);
 }
 
+#[cfg(feature = "surrealdb")]
+#[tokio::test]
+async fn test_ttl_not_implemented() {
+    let queue = common::setup_queue().await;
+    let test_topic = "test_zero_ttl_topic";
+    let message = TestMessage {
+        id: "zero_ttl".to_string(),
+        content: "expires immediately".to_string(),
+    };
+    let options = PublishOptions::builder().ttl(Duration::seconds(0)).build();
+    let result = queue
+        .publish(test_topic, None, &message, Some(options))
+        .await;
+
+    match result {
+        Ok(_) => assert!(false, "Should be unimplemented"),
+        Err(_) => assert!(true),
+    }
+}
+
 #[cfg(not(feature = "surrealdb"))]
 #[tokio::test]
 async fn test_zero_ttl() {

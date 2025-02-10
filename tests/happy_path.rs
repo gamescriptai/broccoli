@@ -571,7 +571,6 @@ async fn test_message_cancellation() {
     }
 }
 
-#[cfg(not(feature = "surrealdb"))]
 #[tokio::test]
 async fn test_message_priority() {
     let queue = common::setup_queue().await;

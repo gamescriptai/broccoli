@@ -40,16 +40,19 @@ pub(crate) struct InternalSurrealDBBrokerMessage {
 pub(crate) struct InternalSurrealDBBrokerQueuedMessageRecord {
     pub(crate) id: RecordId, // this is the queue record id [timestamp, message id]
     pub(crate) message_id: RecordId, // this is the message id: queue_name:task_id
+    pub(crate) priority: i64, // message priority copy, to use for sorting in consumption
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct InternalSurrealDBBrokerQueuedMessage {
     pub(crate) message_id: RecordId, // this is the message id: queue_name:task_id
+    pub(crate) priority: i64,        // message priority copy, to use for sorting in consumption
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct InternalSurrealDBBrokerProcessingMessage {
     pub(crate) message_id: RecordId, // this is the message id: queue_name:task_id
+    pub(crate) priority: i64,        // if we reenqueue, we set the same priority
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -107,6 +110,10 @@ impl Broker for SurrealDBBroker {
         let db = self.check_connected()?;
 
         let publish_options = publish_options.unwrap_or_default();
+        if publish_options.ttl.is_some() {
+            return Err(BroccoliError::NotImplemented);
+        }
+
         let config = self.config.clone().unwrap_or_default();
         let priority = publish_options.priority.unwrap_or(5) as i64;
         if !(1..=5).contains(&priority) {
@@ -114,7 +121,6 @@ impl Broker for SurrealDBBroker {
                 "Priority must be between 1 and 5".to_string(),
             ));
         }
-        let _priority_str = priority.to_string();
         // if we have a delay and scheduling is enabled
         let delay: Option<Duration> = if config.enable_scheduling.is_some() {
             publish_options.delay
@@ -128,8 +134,6 @@ impl Broker for SurrealDBBroker {
         };
         let mut published: Vec<InternalBrokerMessage> = Vec::new();
         for msg in messages {
-            // TODO: look into priority
-
             // 1: insert actual message //
             let inserted =
                 utils::add_message(&db, queue_name, &msg, "Could not publish (add msg)").await?;
@@ -137,8 +141,14 @@ impl Broker for SurrealDBBroker {
 
             // 2: add to queue //
             if delay.is_none() && scheduled_at.is_none() {
-                utils::add_to_queue(&db, queue_name, &msg.task_id, "Could not publish (enqueue)")
-                    .await?;
+                utils::add_to_queue(
+                    &db,
+                    queue_name,
+                    &msg.task_id,
+                    priority,
+                    "Could not publish (enqueue)",
+                )
+                .await?;
             } else {
                 // we either have a delay or a schedule, schedule takes priority
                 if let Some(when) = scheduled_at {
@@ -146,6 +156,7 @@ impl Broker for SurrealDBBroker {
                         &db,
                         queue_name,
                         &msg.task_id,
+                        priority,
                         when,
                         "Could not publish scheduled (enqueue)",
                     )
@@ -155,6 +166,7 @@ impl Broker for SurrealDBBroker {
                         &db,
                         queue_name,
                         &msg.task_id,
+                        priority,
                         when,
                         "Could not publish delayed (enqueue)",
                     )
@@ -196,6 +208,7 @@ impl Broker for SurrealDBBroker {
                     "Could not try consume (removing from queue)",
                 )
                 .await?;
+                // TODO: release lock here to increase performance !!!
 
                 //// 3: if not autoack then add it to processing ////
                 let auto_ack = options.is_some_and(|x| x.auto_ack.unwrap_or(false));
@@ -403,15 +416,22 @@ impl Broker for SurrealDBBroker {
             .map(|config| config.retry_failed.unwrap_or(true))
             .unwrap_or(true)
         {
-            // TODO: handle priority here
             //// 4: if retry is configured, we increase attempts ////
             let mut message = message;
             message.attempts = attempts;
             let task_id = message.task_id.clone();
+            let priority = rejected.priority;
             utils::update_message(&db, queue_name, message, "Could not reject (attempts+1)")
                 .await?;
             //// 4: and reenqueue ////
-            utils::add_to_queue(&db, queue_name, &task_id, "Could not reject (reenqueue)").await?
+            utils::add_to_queue(
+                &db,
+                queue_name,
+                &task_id,
+                priority,
+                "Could not reject (reenqueue)",
+            )
+            .await?
         }
 
         Ok(())

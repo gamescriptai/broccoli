@@ -2,8 +2,8 @@ use std::str::FromStr;
 use surrealdb::engine::any::connect;
 use surrealdb::engine::any::Any;
 use surrealdb::RecordId;
+use surrealdb::Response;
 use surrealdb::Surreal;
-use surrealdb::Value;
 use time::format_description::well_known::Rfc3339;
 use time::Duration;
 use time::OffsetDateTime;
@@ -192,10 +192,11 @@ pub(crate) async fn add_to_queue(
     db: &Surreal<Any>,
     queue_name: &str,
     task_id: &String,
+    priority: i64,
     err_msg: &'static str,
 ) -> Result<(), BroccoliError> {
     let now = OffsetDateTime::now_utc();
-    let _ = self::add_to_queue_scheduled(&db, queue_name, task_id, now, err_msg).await?;
+    let _ = self::add_to_queue_scheduled(&db, queue_name, task_id, priority, now, err_msg).await?;
     Ok(())
 }
 
@@ -204,11 +205,12 @@ pub(crate) async fn add_to_queue_delayed(
     db: &Surreal<Any>,
     queue_name: &str,
     task_id: &String,
+    priority: i64,
     delay: Duration,
     err_msg: &'static str,
 ) -> Result<(), BroccoliError> {
     let when = OffsetDateTime::now_utc() + delay;
-    let _ = self::add_to_queue_scheduled(&db, queue_name, task_id, when, err_msg).await?;
+    let _ = self::add_to_queue_scheduled(&db, queue_name, task_id, priority, when, err_msg).await?;
     Ok(())
 }
 
@@ -217,6 +219,7 @@ pub(crate) async fn add_to_queue_scheduled(
     db: &Surreal<Any>,
     queue_name: &str,
     task_id: &String,
+    priority: i64,
     when: OffsetDateTime,
     err_msg: &'static str,
 ) -> Result<(), BroccoliError> {
@@ -224,7 +227,8 @@ pub(crate) async fn add_to_queue_scheduled(
     match time {
         Ok(time) => {
             let when = format!("<datetime>'{}'", time);
-            let _ = self::add_record_to_queue(db, queue_name, task_id, when, err_msg).await?;
+            let _ =
+                self::add_record_to_queue(db, queue_name, task_id, priority, when, err_msg).await?;
             Ok(())
         }
         Err(e) => Err(BroccoliError::Broker(format!(
@@ -239,6 +243,7 @@ async fn add_record_to_queue(
     db: &Surreal<Any>,
     queue_name: &str,
     task_id: &String,
+    priority: i64,
     when: String,
     err_msg: &'static str,
 ) -> Result<(), BroccoliError> {
@@ -254,6 +259,7 @@ async fn add_record_to_queue(
                 .create(queue_id.clone())
                 .content(InternalSurrealDBBrokerQueuedMessage {
                     message_id: message_record_id,
+                    priority,
                 })
                 .await
                 .map_err(|e: surrealdb::Error| {
@@ -384,12 +390,11 @@ pub(crate) async fn get_queued(
     err_msg: &'static str,
 ) -> Result<Option<InternalSurrealDBBrokerQueuedMessageRecord>, BroccoliError> {
     let queue_table = self::queue_table(queue_name);
-    let resp: Vec<InternalSurrealDBBrokerQueuedMessageRecord> = db
-        .select(queue_table)
-        .range(
-            vec![Value::default(), Value::default()] // default is 'None'
-        ..vec![Value::from_str("time::now()").unwrap_or(Value::default()),Value::default()],
-        )
+    let q = "SELECT * FROM type::thing($queue_table,type::range([[None,None],[time::now(),None]])) ORDER BY priority ASC LIMIT 1";
+    let mut queued: Response = db
+        .query(q)
+        .bind(("queue_table", queue_table))
+        //.bind(("range", range))
         .await
         .map_err(|e| {
             BroccoliError::Broker(format!(
@@ -397,10 +402,19 @@ pub(crate) async fn get_queued(
                 err_msg, queue_name, e
             ))
         })?;
-    let queued_message: Option<&InternalSurrealDBBrokerQueuedMessageRecord> = resp.first();
-    match queued_message {
-        Some(message) => Ok(Some(message.to_owned())),
-        None => Ok(None), // nothing was queued
+    let queued = queued.take(0);
+    match queued {
+        Ok(queued) => {
+            let queued: Option<InternalSurrealDBBrokerQueuedMessageRecord> = queued;
+            match queued {
+                Some(queued) => Ok(Some(queued.to_owned())),
+                None => Ok(None), // nothing was queued
+            }
+        }
+        Err(e) => Err(BroccoliError::Broker(format!(
+            "{}:'{}' Could not get queued (taking value): {}",
+            err_msg, queue_name, e
+        ))),
     }
 }
 
@@ -469,7 +483,7 @@ pub(crate) async fn add_message(
     }
 }
 
-/// update the message, done to update the number of attempts
+/// update the message, done to update the number of attempts, leaving rest unchanged
 pub(crate) async fn update_message(
     db: &Surreal<Any>,
     queue_name: &str,
@@ -561,9 +575,13 @@ pub(crate) async fn add_to_processing(
     let processing_table = self::processing_table(queue_name);
     let message_id = queued_message.message_id;
     let uuid = message_id.key().clone();
+    let priority = queued_message.priority;
     let processing: Option<InternalSurrealDBBrokerProcessingMessage> = db
         .create((processing_table, uuid))
-        .content(InternalSurrealDBBrokerProcessingMessage { message_id })
+        .content(InternalSurrealDBBrokerProcessingMessage {
+            message_id,
+            priority,
+        })
         .await
         .map_err(|e| BroccoliError::Broker(format!("{}:'{}': {}", err_msg, queue_name, e)))?;
     match processing {
