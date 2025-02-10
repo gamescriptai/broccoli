@@ -62,6 +62,7 @@ impl SurrealDBBroker {
 
     /// we create a surreadlb connection from the url configuration
     /// URL parameters after ? are username, password, ns, database
+    /// if unspecified, will default back to root,root,test,test (only for testing!)
     /// note that only 'ws' is supported RTN to allow for live querying
     pub async fn client_from_url(
         broker_url: &str,
@@ -70,10 +71,13 @@ impl SurrealDBBroker {
             BroccoliError::Broker(format!("Failed to parse connection URL: {:?}", e))
         })?;
         let config = SurrealDBConnectionConfig {
-            username: Self::get_param_value(&url, "username")?,
-            password: Self::get_param_value(&url, "password")?,
-            ns: Self::get_param_value(&url, "ns")?,
-            database: Self::get_param_value(&url, "database")?,
+            username: Self::get_param_value(&url, "username")
+                .unwrap_or_else(|_| "root".to_string()),
+            password: Self::get_param_value(&url, "password")
+                .unwrap_or_else(|_| "root".to_string()),
+            ns: Self::get_param_value(&url, "ns").unwrap_or_else(|_| "test".to_string()),
+            database: Self::get_param_value(&url, "database")
+                .unwrap_or_else(|_| "test".to_string()),
         };
         if !url.has_host() || !url.has_host() {
             return Err(BroccoliError::Broker(
@@ -142,6 +146,7 @@ impl Into<InternalBrokerMessage> for InternalSurrealDBBrokerMessage {
             task_id: self.task_id,
             payload: self.payload,
             attempts: self.attempts,
+            disambiguator: None,
             metadata: self.metadata,
         }
     }

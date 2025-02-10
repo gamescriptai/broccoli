@@ -100,6 +100,7 @@ impl Broker for SurrealDBBroker {
     async fn publish(
         &self,
         queue_name: &str,
+        _disambiguator: Option<String>,
         messages: &[InternalBrokerMessage],
         publish_options: Option<PublishOptions>,
     ) -> Result<Vec<InternalBrokerMessage>, BroccoliError> {
