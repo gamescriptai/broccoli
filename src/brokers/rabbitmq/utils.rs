@@ -22,7 +22,7 @@ impl RabbitMQBroker {
         }
     }
 
-    pub(crate) async fn ensure_pool(&self) -> Result<&RabbitPool, BroccoliError> {
+    pub(crate) fn ensure_pool(&self) -> Result<&RabbitPool, BroccoliError> {
         if !self.connected {
             return Err(BroccoliError::Broker(
                 "RabbitMQ broker not connected".to_string(),
@@ -43,8 +43,7 @@ impl RabbitMQBroker {
         let exchange_kind = if self
             .config
             .as_ref()
-            .map(|c| c.enable_scheduling.unwrap_or(false))
-            .unwrap_or(false)
+            .is_some_and(|c| c.enable_scheduling.unwrap_or(false))
         {
             args.insert(
                 "x-delayed-type".into(),
@@ -63,7 +62,7 @@ impl RabbitMQBroker {
                 args.clone(),
             )
             .await
-            .map_err(|e| BroccoliError::Broker(format!("Failed to declare exchange: {:?}", e)))?;
+            .map_err(|e| BroccoliError::Broker(format!("Failed to declare exchange: {e:?}")))?;
 
         Ok(())
     }
@@ -81,7 +80,7 @@ impl RabbitMQBroker {
             );
             args.insert(
                 "x-dead-letter-routing-key".into(),
-                AMQPValue::LongString(format!("{}_failed", queue_name).into()),
+                AMQPValue::LongString(format!("{queue_name}_failed").into()),
             );
         }
 
@@ -97,7 +96,7 @@ impl RabbitMQBroker {
                 args,
             )
             .await
-            .map_err(|e| BroccoliError::Broker(format!("Failed to declare queue: {:?}", e)))?;
+            .map_err(|e| BroccoliError::Broker(format!("Failed to declare queue: {e:?}")))?;
 
         channel
             .queue_bind(
@@ -108,10 +107,10 @@ impl RabbitMQBroker {
                 FieldTable::default(),
             )
             .await
-            .map_err(|e| BroccoliError::Broker(format!("Failed to bind queue: {}", e)))?;
+            .map_err(|e| BroccoliError::Broker(format!("Failed to bind queue: {e}")))?;
 
         // Setup DLX for failed messages
-        let failed_queue = format!("{}_failed", queue_name);
+        let failed_queue = format!("{queue_name}_failed");
         channel
             .queue_declare(
                 &failed_queue,
@@ -122,9 +121,7 @@ impl RabbitMQBroker {
                 FieldTable::default(),
             )
             .await
-            .map_err(|e| {
-                BroccoliError::Broker(format!("Failed to declare failed queue: {:?}", e))
-            })?;
+            .map_err(|e| BroccoliError::Broker(format!("Failed to declare failed queue: {e:?}")))?;
 
         Ok(queue)
     }

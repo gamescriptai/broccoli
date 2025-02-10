@@ -23,14 +23,13 @@ struct Parameters {
 #[tokio::main]
 async fn main() -> Result<(), BroccoliError> {
     #[cfg(feature = "redis")]
-    let queue_url = "redis://localhost:6379";
+    let queue_url = "redis://localhost:6380";
     #[cfg(feature = "rabbitmq")]
     let queue_url = "amqp://localhost:5672";
 
     let queue = BroccoliQueue::builder(queue_url)
         .failed_message_retry_strategy(Default::default())
         .pool_connections(5)
-        .enable_scheduling(true)
         .build()
         .await?;
 
@@ -63,6 +62,7 @@ async fn main() -> Result<(), BroccoliError> {
     let scheduled_jobs = queue
         .publish_batch(
             "jobs",
+            None,
             scheduled_jobs,
             Some(PublishOptions {
                 delay: Some(Duration::seconds(10)),
@@ -103,7 +103,9 @@ async fn main() -> Result<(), BroccoliError> {
 
     // Publish jobs in batch
     println!("Publishing immediate jobs...");
-    let immediate_jobs = queue.publish_batch("jobs", immediate_jobs, None).await?;
+    let immediate_jobs = queue
+        .publish_batch("jobs", None, immediate_jobs, None)
+        .await?;
 
     println!(
         "Published immediate jobs: {:?}",

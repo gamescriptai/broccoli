@@ -40,7 +40,7 @@ async fn error_handler(msg: JobPayload, err: BroccoliError) -> Result<(), Brocco
 async fn main() -> Result<(), Box<dyn Error>> {
     env_logger::init();
     #[cfg(feature = "redis")]
-    let queue_url = "redis://localhost:6379";
+    let queue_url = "redis://localhost:6380";
     #[cfg(feature = "rabbitmq")]
     let queue_url = "amqp://localhost:5672";
 
@@ -48,13 +48,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let queue = BroccoliQueue::builder(queue_url)
         .pool_connections(5)
         .failed_message_retry_strategy(Default::default())
-        .enable_scheduling(true)
         .build()
         .await?;
 
     // Process regular jobs
     queue
-        .process_messages("jobs", Some(4), |msg| async move {
+        .process_messages("jobs", Some(4), None, |msg| async move {
             process_job(msg.payload).await
         })
         .await
@@ -64,6 +63,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .process_messages_with_handlers(
             "jobs",
             Some(5),
+            None,
             |msg| async move { process_job(msg.payload).await },
             |msg| async { success_handler(msg.payload).await },
             |msg, err| async { error_handler(msg.payload, err).await },

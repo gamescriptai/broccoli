@@ -61,7 +61,7 @@ pub enum BroccoliError {
 
     /// Represents errors that occur during message serialization/deserialization.
     ///
-    /// This variant wraps the underlying serde_json error.
+    /// This variant wraps the underlying `serde_json` error.
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
 
@@ -95,7 +95,7 @@ pub enum BroccoliError {
     /// Represents errors that occur when a feature is not implemented.
     ///
     /// # Examples
-    /// - Getting the position of a message for RabbitMQ
+    /// - Getting the position of a message for `RabbitMQ`
     #[error("Feature not implemented")]
     NotImplemented,
 }

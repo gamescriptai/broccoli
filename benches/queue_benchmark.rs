@@ -87,7 +87,7 @@ async fn benchmark_broccoli_throughput(queue: &BroccoliQueue, message_count: usi
 
     // Publish messages
     for msg in &messages {
-        queue.publish(queue_name, msg, None).await.unwrap();
+        queue.publish(queue_name, None, msg, None).await.unwrap();
     }
 
     // Consume messages

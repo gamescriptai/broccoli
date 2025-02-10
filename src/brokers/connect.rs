@@ -18,7 +18,7 @@ use crate::brokers::surrealdb::SurrealDBBroker;
 ///
 /// # Returns
 /// A `Result` containing a boxed broker implementation, or a `BroccoliError` on failure.
-pub(crate) async fn connect_to_broker(
+pub async fn connect_to_broker(
     broker_url: &str,
     config: Option<BrokerConfig>,
 ) -> Result<Box<dyn Broker>, BroccoliError> {
@@ -76,15 +76,13 @@ pub(crate) async fn connect_to_broker(
 
     let mut broker: Box<dyn Broker> = match broker_type {
         #[cfg(feature = "redis")]
-        BrokerType::Redis => Box::new(match config {
-            Some(config) => RedisBroker::new_with_config(config),
-            None => RedisBroker::new(),
-        }),
+        BrokerType::Redis => Box::new(config.map_or_else(RedisBroker::new, |config| {
+            RedisBroker::new_with_config(config)
+        })),
         #[cfg(feature = "rabbitmq")]
-        BrokerType::RabbitMQ => Box::new(match config {
-            Some(config) => RabbitMQBroker::new_with_config(config),
-            None => RabbitMQBroker::new(),
-        }),
+        BrokerType::RabbitMQ => Box::new(config.map_or_else(RabbitMQBroker::new, |config| {
+            RabbitMQBroker::new_with_config(config)
+        })),
         #[cfg(feature = "surrealdb")]
         BrokerType::SurrealDB => Box::new(match config {
             Some(config) => SurrealDBBroker::new_with_config(config),

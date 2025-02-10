@@ -1,3 +1,5 @@
+use std::sync::RwLock;
+
 use redis::AsyncCommands;
 
 use crate::{
@@ -9,55 +11,13 @@ use crate::{
 use super::utils::OptionalInternalBrokerMessage;
 
 pub(crate) type RedisPool = bb8_redis::bb8::Pool<bb8_redis::RedisConnectionManager>;
-pub(crate) type RedisConnection<'a> =
-    bb8_redis::bb8::PooledConnection<'a, bb8_redis::RedisConnectionManager>;
 
 #[derive(Default)]
 /// A message broker implementation for Redis.
 pub struct RedisBroker {
-    pub(crate) redis_pool: Option<RedisPool>,
-    pub(crate) connected: bool,
+    pub(crate) redis_pool: Option<RwLock<RedisPool>>,
+    pub(crate) broker_url: String,
     pub(crate) config: Option<BrokerConfig>,
-}
-
-/// Retrieves a Redis connection from the pool, retrying with exponential backoff if necessary.
-///
-/// # Arguments
-/// * `redis_pool` - A reference to the Redis connection pool.
-///
-/// # Returns
-/// A `Result` containing a `RedisConnection` on success, or a `BroccoliError` on failure.
-pub(crate) async fn get_redis_connection(
-    redis_pool: &RedisPool,
-) -> Result<RedisConnection, BroccoliError> {
-    let mut redis_conn_sleep = std::time::Duration::from_secs(1);
-
-    #[allow(unused_assignments)]
-    let mut opt_redis_connection = None;
-
-    loop {
-        let borrowed_redis_connection = match redis_pool.get().await {
-            Ok(redis_connection) => Some(redis_connection),
-            Err(err) => {
-                BroccoliError::Broker(format!("Failed to get redis connection: {:?}", err));
-                None
-            }
-        };
-
-        if borrowed_redis_connection.is_some() {
-            opt_redis_connection = borrowed_redis_connection;
-            break;
-        }
-
-        tokio::time::sleep(redis_conn_sleep).await;
-        redis_conn_sleep = std::cmp::min(redis_conn_sleep * 2, std::time::Duration::from_secs(300));
-    }
-
-    let redis_connection = opt_redis_connection.ok_or(BroccoliError::Broker(
-        "Failed to get redis connection".to_string(),
-    ))?;
-
-    Ok(redis_connection)
 }
 
 /// Implementation of the `Broker` trait for `RedisBroker`.
@@ -71,25 +31,23 @@ impl Broker for RedisBroker {
     /// # Returns
     /// A `Result` indicating success or failure.
     async fn connect(&mut self, broker_url: &str) -> Result<(), BroccoliError> {
-        let redis_manager = bb8_redis::RedisConnectionManager::new(broker_url).map_err(|e| {
-            BroccoliError::Broker(format!("Failed to create redis manager: {:?}", e))
-        })?;
+        let redis_manager = bb8_redis::RedisConnectionManager::new(broker_url)
+            .map_err(|e| BroccoliError::Broker(format!("Failed to create redis manager: {e:?}")))?;
 
         let redis_pool = bb8_redis::bb8::Pool::builder()
             .max_size(
                 self.config
                     .as_ref()
-                    .map(|config| config.pool_connections.unwrap_or(10))
-                    .unwrap_or(10)
+                    .map_or(10, |config| config.pool_connections.unwrap_or(10))
                     .into(),
             )
             .connection_timeout(std::time::Duration::from_secs(2))
             .build(redis_manager)
             .await
-            .map_err(|e| BroccoliError::Broker(format!("Failed to create redis pool: {:?}", e)))?;
+            .map_err(|e| BroccoliError::Broker(format!("Failed to create redis pool: {e:?}")))?;
 
-        self.redis_pool = Some(redis_pool);
-        self.connected = true;
+        self.redis_pool = Some(RwLock::new(redis_pool));
+        self.broker_url = broker_url.to_string();
         Ok(())
     }
 
@@ -104,20 +62,22 @@ impl Broker for RedisBroker {
     async fn publish(
         &self,
         queue_name: &str,
+        disambiguator: Option<String>,
         messages: &[InternalBrokerMessage],
         publish_options: Option<PublishOptions>,
     ) -> Result<Vec<InternalBrokerMessage>, BroccoliError> {
-        let redis_pool = self.ensure_pool()?;
-        let mut redis_connection = get_redis_connection(&redis_pool).await?;
+        let mut redis_connection = self.get_redis_connection().await?;
 
         for msg in messages {
             let attempts = msg.attempts.to_string();
 
-            let priority = publish_options
-                .clone()
-                .unwrap_or_default()
-                .priority
-                .unwrap_or(5) as i64;
+            let priority = i64::from(
+                publish_options
+                    .clone()
+                    .unwrap_or_default()
+                    .priority
+                    .unwrap_or(5),
+            );
 
             if !(1..=5).contains(&priority) {
                 return Err(BroccoliError::Broker(
@@ -126,12 +86,16 @@ impl Broker for RedisBroker {
             }
 
             let priority_str = priority.to_string();
-            let items: Vec<(&str, &str)> = vec![
+            let mut items: Vec<(&str, &str)> = vec![
                 ("task_id", &msg.task_id),
                 ("payload", &msg.payload),
                 ("attempts", &attempts),
                 ("priority", &priority_str),
             ];
+
+            if let Some(ref disambiguator) = disambiguator {
+                items.push(("disambiguator", disambiguator));
+            }
 
             let mut score = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
 
@@ -144,8 +108,7 @@ impl Broker for RedisBroker {
                     if self
                         .config
                         .as_ref()
-                        .map(|c| c.enable_scheduling.unwrap_or(false))
-                        .unwrap_or(false)
+                        .is_some_and(|c| c.enable_scheduling.unwrap_or(false))
                     {
                         score += (delay.as_seconds_f32() * 1_000_000_000.0) as i64;
                     }
@@ -155,8 +118,7 @@ impl Broker for RedisBroker {
                     if self
                         .config
                         .as_ref()
-                        .map(|c| c.enable_scheduling.unwrap_or(false))
-                        .unwrap_or(false)
+                        .is_some_and(|c| c.enable_scheduling.unwrap_or(false))
                     {
                         score = timestamp.unix_timestamp_nanos() as i64;
                     }
@@ -172,12 +134,43 @@ impl Broker for RedisBroker {
                 }
             }
 
-            redis_connection
-                .zadd::<String, i64, &str, String>(
-                    queue_name.to_string(),
-                    &msg.task_id.to_string(),
-                    priority * score,
-                )
+            let script = redis::Script::new(
+                r#"
+                local base_queue_name = KEYS[1]
+                local task_id = ARGV[1]
+                local score = tonumber(ARGV[2])
+                local priority = tonumber(ARGV[3])
+                local disambiguator = ARGV[4]
+
+                local queue_name = base_queue_name
+                if disambiguator ~= '' then
+                    queue_name = string.format("%s_%s_queue", base_queue_name, disambiguator)
+                end
+
+                redis.call('ZADD', queue_name, priority * score, task_id)
+
+                if disambiguator ~= '' then
+                    local fairness_set = string.format("%s_fairness_set", base_queue_name)
+                    local fairness_round_robin = string.format("%s_fairness_round_robin", base_queue_name)
+                    local exists_in_tracking_set = redis.call('SISMEMBER', fairness_set, disambiguator)
+
+                    if exists_in_tracking_set == 0 then
+                        redis.call('SADD', fairness_set, disambiguator)
+                        redis.call('RPUSH', fairness_round_robin, disambiguator)
+                    end
+                end
+            "#,
+            );
+
+            let disambiguator_str = disambiguator.clone().unwrap_or_default();
+
+            script
+                .key(queue_name)
+                .arg(&msg.task_id)
+                .arg(score)
+                .arg(priority)
+                .arg(&disambiguator_str)
+                .invoke_async::<()>(&mut redis_connection)
                 .await?;
         }
 
@@ -198,8 +191,7 @@ impl Broker for RedisBroker {
         queue_name: &str,
         options: Option<ConsumeOptions>,
     ) -> Result<Option<InternalBrokerMessage>, BroccoliError> {
-        let redis_pool = self.ensure_pool()?;
-        let mut redis_connection = get_redis_connection(&redis_pool).await?;
+        let mut redis_connection = self.get_redis_connection().await?;
         let mut payload: OptionalInternalBrokerMessage = OptionalInternalBrokerMessage(None);
 
         while payload.0.is_none() {
@@ -211,9 +203,10 @@ impl Broker for RedisBroker {
                 break;
             }
 
-            payload = redis_connection.hgetall(&task_id).await.map_err(|e| {
-                BroccoliError::Consume(format!("Failed to consume message: {:?}", e))
-            })?;
+            payload = redis_connection
+                .hgetall(&task_id)
+                .await
+                .map_err(|e| BroccoliError::Consume(format!("Failed to consume message: {e:?}")))?;
         }
 
         Ok(payload.0)
@@ -241,9 +234,9 @@ impl Broker for RedisBroker {
             }
         }
 
-        let message = message.ok_or(BroccoliError::Consume(
-            "Failed to consume message: No message available".to_string(),
-        ))?;
+        let message = message.ok_or_else(|| {
+            BroccoliError::Consume("Failed to consume message: No message available".to_string())
+        })?;
 
         Ok(message)
     }
@@ -261,12 +254,15 @@ impl Broker for RedisBroker {
         queue_name: &str,
         message: InternalBrokerMessage,
     ) -> Result<(), BroccoliError> {
-        let redis_pool = self.ensure_pool()?;
+        let mut redis_connection = self.get_redis_connection().await?;
 
-        let mut redis_connection = get_redis_connection(&redis_pool).await?;
+        let processing_queue_name = message.disambiguator.as_ref().map_or_else(
+            || format!("{queue_name}_processing"),
+            |disambiguator| format!("{queue_name}_{disambiguator}_processing"),
+        );
 
         redis_connection
-            .lrem::<String, &str, String>(format!("{}_processing", queue_name), 1, &message.task_id)
+            .lrem::<String, &str, String>(processing_queue_name, 1, &message.task_id)
             .await?;
 
         redis_connection
@@ -289,30 +285,36 @@ impl Broker for RedisBroker {
         queue_name: &str,
         message: InternalBrokerMessage,
     ) -> Result<(), BroccoliError> {
-        let redis_pool = self.ensure_pool()?;
-
-        let mut redis_connection = get_redis_connection(&redis_pool).await?;
+        let mut redis_connection = self.get_redis_connection().await?;
 
         let attempts = message.attempts + 1;
 
+        let processing_queue_name = message.disambiguator.as_ref().map_or_else(
+            || format!("{queue_name}_processing"),
+            |disambiguator| format!("{queue_name}_{disambiguator}_processing"),
+        );
+
         redis_connection
-            .lrem::<String, &str, String>(format!("{}_processing", queue_name), 1, &message.task_id)
+            .lrem::<String, &str, String>(processing_queue_name, 1, &message.task_id)
             .await?;
 
         if (attempts
             >= self
                 .config
                 .as_ref()
-                .map(|config| config.retry_attempts.unwrap_or(3))
-                .unwrap_or(3))
+                .map_or(3, |config| config.retry_attempts.unwrap_or(3)))
             || !self
                 .config
                 .as_ref()
-                .map(|config| config.retry_failed.unwrap_or(true))
-                .unwrap_or(true)
+                .map_or(true, |config| config.retry_failed.unwrap_or(true))
         {
+            let failed_queue_name = message.disambiguator.as_ref().map_or_else(
+                || format!("{queue_name}_failed"),
+                |disambiguator| format!("{queue_name}_{disambiguator}_failed"),
+            );
+
             redis_connection
-                .lpush::<String, &str, String>(format!("{}_failed", queue_name), &message.task_id)
+                .lpush::<String, &str, String>(failed_queue_name, &message.task_id)
                 .await?;
 
             log::error!(
@@ -326,8 +328,7 @@ impl Broker for RedisBroker {
         if self
             .config
             .as_ref()
-            .map(|config| config.retry_failed.unwrap_or(true))
-            .unwrap_or(true)
+            .map_or(true, |config| config.retry_failed.unwrap_or(true))
         {
             let priority = message
                 .metadata
@@ -335,21 +336,24 @@ impl Broker for RedisBroker {
                 .and_then(|m| m.get("priority"))
                 .and_then(|v| match v {
                     MetadataTypes::String(priority) => Some(priority),
-                    _ => None,
+                    MetadataTypes::U64(_) => None,
                 })
                 .ok_or_else(|| BroccoliError::Acknowledge("Missing priority".to_string()))?
-                .parse::<i64>()
+                .parse::<u8>()
                 .map_err(|e| {
-                    BroccoliError::Acknowledge(format!("Failed to parse priority: {}", e))
+                    BroccoliError::Acknowledge(format!("Failed to parse priority: {e}"))
                 })?;
 
-            redis_connection
-                .zadd::<String, i64, &str, String>(
-                    queue_name.to_string(),
-                    &message.task_id.to_string(),
-                    priority * time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64,
-                )
-                .await?;
+            self.publish(
+                queue_name,
+                message.disambiguator.clone(),
+                &[message.clone()],
+                Some(PublishOptions {
+                    priority: Some(priority),
+                    ..Default::default()
+                }),
+            )
+            .await?;
 
             redis_connection
                 .hincr::<&str, &str, u8, String>(&message.task_id, "attempts", 1)
@@ -368,9 +372,7 @@ impl Broker for RedisBroker {
     /// # Returns
     /// A `Result` indicating success or failure.
     async fn cancel(&self, queue_name: &str, message_id: String) -> Result<(), BroccoliError> {
-        let redis_pool = self.ensure_pool()?;
-
-        let mut redis_connection = get_redis_connection(&redis_pool).await?;
+        let mut redis_connection = self.get_redis_connection().await?;
 
         redis_connection
             .zrem::<&str, &str, String>(queue_name, &message_id)

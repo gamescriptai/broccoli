@@ -2,7 +2,7 @@
 pub mod broker;
 /// Contains functions to connect to a broker
 pub(crate) mod connect;
-/// Contains the RabbitMQ broker implementation
+/// Contains the `RabbitMQ` broker implementation
 #[cfg(feature = "rabbitmq")]
 pub mod rabbitmq;
 /// Contains the Redis broker implementation

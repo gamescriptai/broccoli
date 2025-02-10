@@ -1,8 +1,9 @@
 #![warn(missing_docs)]
 #![deny(clippy::unwrap_used)]
 #![deny(clippy::expect_used)]
+#![warn(clippy::all, clippy::pedantic, clippy::nursery, clippy::cargo)]
 //! Broccoli is a message broker library that provides a simple API for sending and receiving messages.
-//! It currently supports Redis as a message broker, with plans to support additional brokers in the future, such as RabbitMQ and Kafka.
+//! It currently supports Redis as a message broker, with plans to support additional brokers in the future, such as `RabbitMQ` and Kafka.
 
 #[cfg(not(any(feature = "redis", feature = "rabbitmq", feature = "surrealdb")))]
 compile_error!(
