@@ -242,8 +242,7 @@ impl Broker for SurrealDBBroker {
     }
 
     /// Consumes a message from the specified queue, blocking until a message is available.
-    /// TODO: once enough time has passed that messages are relevant, we should awaken and return the message
-    ///
+    /// Uses live querying, so if there are no messages yet, it will block efficiently without polling
     /// # Arguments
     /// * `queue_name` - The name of the queue.
     ///
@@ -274,7 +273,6 @@ impl Broker for SurrealDBBroker {
             .map_err(|err| BroccoliError::Broker(format!("Could not consume: {:?}", err)))?;
         let mut queued_message: Result<InternalSurrealDBBrokerQueuedMessageRecord, BroccoliError> =
             Err(BroccoliError::NotImplemented);
-        // this should block in theory
         while let Some(notification) = futures::StreamExt::next(&mut stream).await {
             // we have a notification and exit the loop if it's a create
             let payload: Option<Result<InternalSurrealDBBrokerQueuedMessageRecord, BroccoliError>> =
