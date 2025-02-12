@@ -837,8 +837,15 @@ impl BroccoliQueue {
     {
         let handles = FuturesUnordered::new();
         let consume_options = consume_options.clone();
-
+        // tokio can't abort CPU bound loops, by calling the sleep await, we allow tokio to abort
+        // the running thread, even if the sleep is set to zero
+        let sleep = consume_options
+            .clone()
+            .unwrap_or_default()
+            .consume_wait
+            .unwrap_or(std::time::Duration::ZERO);
         loop {
+            tokio::time::sleep(sleep).await;
             if let Some(concurrency) = concurrency {
                 while handles.len() < concurrency {
                     let broker = Arc::clone(&self.broker);
@@ -903,7 +910,7 @@ impl BroccoliQueue {
             } else {
                 let message = self
                     .broker
-                    .consume(topic, Default::default())
+                    .consume(topic, consume_options.clone())
                     .await
                     .map_err(|e| {
                         log::error!("Failed to consume message: {:?}", e);
