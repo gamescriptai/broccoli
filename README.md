@@ -119,7 +119,7 @@ This multi-broker approach will allow you to choose the message broker that best
 ## Roadmap
 
 - [x] Redis broker implementation
-- [ ] RabbitMQ broker support
+- [x] RabbitMQ broker support
 - [ ] Kafka broker support
 - [ ] Proc macros for building workers
 - [ ] Additional message patterns
