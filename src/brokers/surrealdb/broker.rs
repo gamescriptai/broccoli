@@ -13,7 +13,7 @@ use time::Duration;
 
 use super::utils;
 
-/// SurrealDB state struct
+/// `SurrealDB` state struct
 pub struct SurrealDBBroker {
     pub(crate) db: Option<Surreal<Any>>,
     pub(crate) connected: bool,
@@ -22,7 +22,7 @@ pub struct SurrealDBBroker {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct InternalSurrealDBBrokerMessage {
-    /// Actual record id in surrealDB (topicname,task_id)
+    /// Actual record id in surrealDB (`topicname,task_id`)
     pub id: RecordId,
     /// Unique identifier for the message (external version, without table name)
     pub task_id: String,
@@ -86,7 +86,7 @@ impl Broker for SurrealDBBroker {
     ///
     ///
     async fn connect(&mut self, broker_url: &str) -> Result<(), BroccoliError> {
-        let db = SurrealDBBroker::client_from_url(broker_url).await?;
+        let db = Self::client_from_url(broker_url).await?;
         self.db = db;
         self.connected = true;
         Ok(())
@@ -115,7 +115,7 @@ impl Broker for SurrealDBBroker {
         }
 
         let config = self.config.clone().unwrap_or_default();
-        let priority = publish_options.priority.unwrap_or(5) as i64;
+        let priority = i64::from(publish_options.priority.unwrap_or(5));
         if !(1..=5).contains(&priority) {
             return Err(BroccoliError::Broker(
                 "Priority must be between 1 and 5".to_string(),
@@ -136,7 +136,7 @@ impl Broker for SurrealDBBroker {
         for msg in messages {
             // 1: insert actual message //
             let inserted =
-                utils::add_message(&db, queue_name, &msg, "Could not publish (add msg)").await?;
+                utils::add_message(&db, queue_name, msg, "Could not publish (add msg)").await?;
             published.push(inserted);
 
             // 2: add to queue //
@@ -160,7 +160,7 @@ impl Broker for SurrealDBBroker {
                         when,
                         "Could not publish scheduled (enqueue)",
                     )
-                    .await?
+                    .await?;
                 } else if let Some(when) = delay {
                     utils::add_to_queue_delayed(
                         &db,
@@ -170,7 +170,7 @@ impl Broker for SurrealDBBroker {
                         when,
                         "Could not publish delayed (enqueue)",
                     )
-                    .await?
+                    .await?;
                 }
             }
         }
@@ -254,7 +254,7 @@ impl Broker for SurrealDBBroker {
         options: Option<ConsumeOptions>,
     ) -> Result<InternalBrokerMessage, BroccoliError> {
         // first of all, we try to consume without blocking, and return if we have messages
-        let resp = Self::try_consume(&self, queue_name, options).await?;
+        let resp = Self::try_consume(self, queue_name, options).await?;
         if let Some(message) = resp {
             return Ok(message);
         }
@@ -266,11 +266,11 @@ impl Broker for SurrealDBBroker {
             .select(queue_table)
             .range(
                 vec![Value::default(), Value::default()] // note default is 'None'
-                ..vec![Value::from_str("time::now()").unwrap_or(Value::default()),Value::default()],
+                ..vec![Value::from_str("time::now()").unwrap_or_default(),Value::default()],
             ) // should notify when future becomes present
             .live()
             .await
-            .map_err(|err| BroccoliError::Broker(format!("Could not consume: {:?}", err)))?;
+            .map_err(|err| BroccoliError::Broker(format!("Could not consume: {err:?}")))?;
         let mut queued_message: Result<InternalSurrealDBBrokerQueuedMessageRecord, BroccoliError> =
             Err(BroccoliError::NotImplemented);
         while let Some(notification) = futures::StreamExt::next(&mut stream).await {
@@ -287,8 +287,7 @@ impl Broker for SurrealDBBroker {
                         }
                     }
                     Err(error) => Some(Err(BroccoliError::Broker(format!(
-                        "Could not consume::'{}' {}",
-                        queue_name, error
+                        "Could not consume::'{queue_name}' {error}"
                     )))),
                 };
             if let Some(message) = payload {
@@ -375,13 +374,11 @@ impl Broker for SurrealDBBroker {
             >= self
                 .config
                 .as_ref()
-                .map(|config| config.retry_attempts.unwrap_or(3))
-                .unwrap_or(3))
+                .map_or(3, |config| config.retry_attempts.unwrap_or(3)))
             || !self
                 .config
                 .as_ref()
-                .map(|config| config.retry_failed.unwrap_or(true))
-                .unwrap_or(true)
+                .map_or(true, |config| config.retry_failed.unwrap_or(true))
         {
             let msg = utils::get_message(
                 &db,
@@ -411,8 +408,7 @@ impl Broker for SurrealDBBroker {
         if self
             .config
             .as_ref()
-            .map(|config| config.retry_failed.unwrap_or(true))
-            .unwrap_or(true)
+            .map_or(true, |config| config.retry_failed.unwrap_or(true))
         {
             //// 4: if retry is configured, we increase attempts ////
             let mut message = message;
@@ -429,7 +425,7 @@ impl Broker for SurrealDBBroker {
                 priority,
                 "Could not reject (reenqueue)",
             )
-            .await?
+            .await?;
         }
 
         Ok(())
@@ -467,8 +463,7 @@ impl Broker for SurrealDBBroker {
                 .await
             }
             None => Err(BroccoliError::Broker(format!(
-                "Could not cancel (task_id not found):{}:{}",
-                queue_name, task_id
+                "Could not cancel (task_id not found):{queue_name}:{task_id}"
             ))),
         }
     }

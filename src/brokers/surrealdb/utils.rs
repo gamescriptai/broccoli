@@ -33,10 +33,17 @@ struct InternalSurrealDBBrokerQueueIndex {
     pub queue_id: RecordId, // points to queue:[timestamp,messageid]
 }
 
+impl Default for SurrealDBBroker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SurrealDBBroker {
     /// Creates a new `SurrealDBBroker` instance with default configuration.
-    pub fn new() -> Self {
-        SurrealDBBroker {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
             db: None,
             connected: false,
             config: None,
@@ -44,7 +51,8 @@ impl SurrealDBBroker {
     }
 
     /// new with passed configuration
-    pub(crate) fn new_with_config(config: BrokerConfig) -> Self {
+    #[must_use]
+    pub(crate) const fn new_with_config(config: BrokerConfig) -> Self {
         Self {
             db: None,
             connected: false,
@@ -54,22 +62,30 @@ impl SurrealDBBroker {
 
     /// check and return current active connection
     pub(crate) fn check_connected(&self) -> Result<Surreal<Any>, BroccoliError> {
-        match &self.db {
-            Some(db) => Ok(db.to_owned()),
-            None => Err(BroccoliError::Broker("Not connected".to_string())),
-        }
+        self.db.as_ref().map_or_else(
+            || Err(BroccoliError::Broker("Not connected".to_string())),
+            |db| Ok(db.to_owned()),
+        )
     }
 
     /// we create a surreadlb connection from the url configuration
     /// URL parameters after ? are username, password, ns, database
     /// if unspecified, will default back to root,root,test,test (only for testing!)
     /// note that only 'ws' is supported RTN to allow for live querying
+    ///
+    /// # Arguments
+    /// * `broker_url` - The URL of the broker.
+    ///
+    /// # Returns
+    /// A `Result` containing a boxed broker implementation, or a `BroccoliError` on failure.
+    ///
+    /// # Errors
+    /// * `BroccoliError::Broker` - If the connection URL is invalid.
     pub async fn client_from_url(
         broker_url: &str,
     ) -> Result<std::option::Option<Surreal<Any>>, BroccoliError> {
-        let url = Url::parse(broker_url).map_err(|e| {
-            BroccoliError::Broker(format!("Failed to parse connection URL: {:?}", e))
-        })?;
+        let url = Url::parse(broker_url)
+            .map_err(|e| BroccoliError::Broker(format!("Failed to parse connection URL: {e:?}")))?;
         let config = SurrealDBConnectionConfig {
             username: Self::get_param_value(&url, "username")
                 .unwrap_or_else(|_| "root".to_string()),
@@ -96,10 +112,15 @@ impl SurrealDBBroker {
                 "Failed to connect to SurrealDB: missing port number".to_string(),
             ));
         }
-        let connection_url = format!("ws://{}:{}/rpc", url.host_str().unwrap(), port.unwrap());
-        let db = connect(connection_url).await.map_err(|e| {
-            BroccoliError::Broker(format!("Failed to connect to SurrealDB: {:?}", e))
-        })?;
+
+        let connection_url = format!(
+            "ws://{}:{}/rpc",
+            url.host_str().unwrap_or("localhost"),
+            port.unwrap_or(8000)
+        );
+        let db = connect(connection_url)
+            .await
+            .map_err(|e| BroccoliError::Broker(format!("Failed to connect to SurrealDB: {e:?}")))?;
 
         db.signin(surrealdb::opt::auth::Root {
             username: &config.username,
@@ -107,16 +128,14 @@ impl SurrealDBBroker {
         })
         .await
         .map_err(|e| {
-            BroccoliError::Broker(format!("Incorrect credentials for SurrealDB: {:?}", e))
+            BroccoliError::Broker(format!("Incorrect credentials for SurrealDB: {e:?}"))
         })?;
 
         // Select a specific namespace / database
         db.use_ns(config.ns)
             .use_db(config.database)
             .await
-            .map_err(|e| {
-                BroccoliError::Broker(format!("NS/DB not found for SurrealDB: {:?}", e))
-            })?;
+            .map_err(|e| BroccoliError::Broker(format!("NS/DB not found for SurrealDB: {e:?}")))?;
 
         Ok(Some(db))
     }
@@ -125,29 +144,28 @@ impl SurrealDBBroker {
     pub(crate) fn get_param_value(url: &Url, name: &str) -> Result<String, BroccoliError> {
         url.query_pairs()
             .find(|(k, _)| k == name)
-            .map(|(_, v)| v.into_owned().to_string())
+            .map(|(_, v)| v.into_owned())
             .map_or_else(
                 || {
                     Err(BroccoliError::Broker(format!(
-                        "Missing connection param: {}",
-                        name
+                        "Missing connection param: {name}"
                     )))
                 },
-                |v| Ok(v),
+                Ok,
             )
     }
 }
 
 // convenience into and from conversion between the broccoli and the surrealdb layer
 
-impl Into<InternalBrokerMessage> for InternalSurrealDBBrokerMessage {
-    fn into(self) -> InternalBrokerMessage {
-        InternalBrokerMessage {
-            task_id: self.task_id,
-            payload: self.payload,
-            attempts: self.attempts,
+impl From<InternalSurrealDBBrokerMessage> for InternalBrokerMessage {
+    fn from(val: InternalSurrealDBBrokerMessage) -> Self {
+        Self {
+            task_id: val.task_id,
+            payload: val.payload,
+            attempts: val.attempts,
             disambiguator: None,
-            metadata: self.metadata,
+            metadata: val.metadata,
         }
     }
 }
@@ -155,7 +173,7 @@ impl Into<InternalBrokerMessage> for InternalSurrealDBBrokerMessage {
 impl InternalSurrealDBBrokerMessage {
     fn from(queue_name: &str, msg: InternalBrokerMessage) -> Self {
         let id: RecordId = (queue_name, msg.task_id.clone()).into();
-        InternalSurrealDBBrokerMessage {
+        Self {
             id,
             task_id: msg.task_id,
             payload: msg.payload,
@@ -165,30 +183,30 @@ impl InternalSurrealDBBrokerMessage {
     }
 }
 
-/// this table holds a timesorted timeseries, <queue_name>:[<timestamp>,<taskid>]
+/// this table holds a timesorted timeseries, <`queue_name>`:[<timestamp>,<taskid>]
 /// and acts as the queue
-pub(crate) fn queue_table(queue_name: &str) -> String {
-    format!("{}___queue", queue_name)
+pub fn queue_table(queue_name: &str) -> String {
+    format!("{queue_name}___queue")
 }
 
 /// this table holds messages in process
 fn processing_table(queue_name: &str) -> String {
-    format!("{}___processing", queue_name)
+    format!("{queue_name}___processing")
 }
 
 /// this is the failed messages table
 fn failed_table(queue_name: &str) -> String {
-    format!("{}___failed", queue_name)
+    format!("{queue_name}___failed")
 }
 
 /// this is an index to go from <queue_name>___index:[<taskid>,<queuename>] to the queue table
 /// in O(k) time
 fn index_table(queue_name: &str) -> String {
-    format!("{}___index", queue_name)
+    format!("{queue_name}___index")
 }
 
 /// add to the timeseries
-pub(crate) async fn add_to_queue(
+pub async fn add_to_queue(
     db: &Surreal<Any>,
     queue_name: &str,
     task_id: &String,
@@ -196,12 +214,12 @@ pub(crate) async fn add_to_queue(
     err_msg: &'static str,
 ) -> Result<(), BroccoliError> {
     let now = OffsetDateTime::now_utc();
-    let _ = self::add_to_queue_scheduled(&db, queue_name, task_id, priority, now, err_msg).await?;
+    let () = self::add_to_queue_scheduled(db, queue_name, task_id, priority, now, err_msg).await?;
     Ok(())
 }
 
 /// add to the timeseries with a delay duration
-pub(crate) async fn add_to_queue_delayed(
+pub async fn add_to_queue_delayed(
     db: &Surreal<Any>,
     queue_name: &str,
     task_id: &String,
@@ -210,12 +228,12 @@ pub(crate) async fn add_to_queue_delayed(
     err_msg: &'static str,
 ) -> Result<(), BroccoliError> {
     let when = OffsetDateTime::now_utc() + delay;
-    let _ = self::add_to_queue_scheduled(&db, queue_name, task_id, priority, when, err_msg).await?;
+    let () = self::add_to_queue_scheduled(db, queue_name, task_id, priority, when, err_msg).await?;
     Ok(())
 }
 
 /// add to the timeseries at a scheduled time, can be in the past and it will be triggered immediately
-pub(crate) async fn add_to_queue_scheduled(
+pub async fn add_to_queue_scheduled(
     db: &Surreal<Any>,
     queue_name: &str,
     task_id: &String,
@@ -226,14 +244,13 @@ pub(crate) async fn add_to_queue_scheduled(
     let time = to_rfc3339(when);
     match time {
         Ok(time) => {
-            let when = format!("<datetime>'{}'", time);
-            let _ =
+            let when = format!("<datetime>'{time}'");
+            let () =
                 self::add_record_to_queue(db, queue_name, task_id, priority, when, err_msg).await?;
             Ok(())
         }
         Err(e) => Err(BroccoliError::Broker(format!(
-            "{}:'{}' could not convert delay: {})",
-            err_msg, queue_name, e
+            "{err_msg}:'{queue_name}' could not convert delay: {e})"
         ))),
     }
 }
@@ -250,7 +267,7 @@ async fn add_record_to_queue(
     let queue_table = self::queue_table(queue_name);
     // TODO: look at building the record programmatically, move when to typed
     // compromise here is that we do explicit casting of the uuid, if it's not correct it will fail
-    let queue_record_str = format!("{}:[{},<uuid>'{}']", queue_table, when, task_id);
+    let queue_record_str = format!("{queue_table}:[{when},<uuid>'{task_id}']");
     let queue_record_id = RecordId::from_str(&queue_record_str);
     match queue_record_id {
         Ok(queue_id) => {
@@ -263,24 +280,22 @@ async fn add_record_to_queue(
                 })
                 .await
                 .map_err(|e: surrealdb::Error| {
-                    BroccoliError::Broker(format!("{}:'{}': {}", err_msg, queue_name, e))
+                    BroccoliError::Broker(format!("{err_msg}:'{queue_name}': {e}"))
                 })?;
             match qm {
                 Some(_) => {
                     // now we insert into the index and we are done, note we insert the queue id
-                    let _ = self::add_to_queue_index(&db, queue_name, task_id, queue_id, err_msg)
+                    let () = self::add_to_queue_index(db, queue_name, task_id, queue_id, err_msg)
                         .await?;
                     Ok(())
                 }
                 None => Err(BroccoliError::Broker(format!(
-                    "{}:'{}': adding to queue (silently did not add)",
-                    err_msg, queue_name,
+                    "{err_msg}:'{queue_name}': adding to queue (silently did not add)",
                 ))),
             }
         }
         Err(err) => Err(BroccoliError::Broker(format!(
-            "{}:'{}': adding to queue  (wrong record): {}",
-            err_msg, queue_name, err,
+            "{err_msg}:'{queue_name}': adding to queue  (wrong record): {err}",
         ))),
     }
 }
@@ -299,7 +314,7 @@ async fn add_to_queue_index(
     // we upsert because if re reenqueue we will be re-setting and not creating from scratch
     // error: index record is wrong, there is a serde problem or we did not insert anything
     let index_table = self::index_table(queue_name);
-    let index_record_str = format!("{}:[<uuid>'{}','{}']", index_table, task_id, queue_name);
+    let index_record_str = format!("{index_table}:[<uuid>'{task_id}','{queue_name}']");
     let index_record_id = RecordId::from_str(&index_record_str);
     match index_record_id {
         Ok(record_id) => {
@@ -308,19 +323,17 @@ async fn add_to_queue_index(
                 .content(InternalSurrealDBBrokerQueueIndex { queue_id })
                 .await
                 .map_err(|e: surrealdb::Error| {
-                    BroccoliError::Broker(format!("{}:'{}': {}", err_msg, queue_name, e))
+                    BroccoliError::Broker(format!("{err_msg}:'{queue_name}': {e}"))
                 })?;
             match qm {
                 Some(_) => Ok(()), // happy path
                 None => Err(BroccoliError::Broker(format!(
-                    "{}:'{}': adding to index (silently did not add)",
-                    err_msg, queue_name,
+                    "{err_msg}:'{queue_name}': adding to index (silently did not add)",
                 ))),
             }
         }
         Err(e) => Err(BroccoliError::Broker(format!(
-            "{}:'{}': adding to index (wrong index record): {}",
-            err_msg, queue_name, e,
+            "{err_msg}:'{queue_name}': adding to index (wrong index record): {e}",
         ))),
     }
 }
@@ -333,19 +346,18 @@ async fn get_queue_index(
     err_msg: &'static str,
 ) -> Result<Option<InternalSurrealDBBrokerQueueIndex>, BroccoliError> {
     let index_table = self::index_table(queue_name);
-    let index_record_str = format!("{}:[<uuid>'{}','{}']", index_table, task_id, queue_name);
+    let index_record_str = format!("{index_table}:[<uuid>'{task_id}','{queue_name}']");
     let index_record_id = RecordId::from_str(&index_record_str);
     match index_record_id {
         Ok(record_id) => {
             let message: Option<InternalSurrealDBBrokerQueueIndex> =
                 db.select(record_id).await.map_err(|e: surrealdb::Error| {
-                    BroccoliError::Broker(format!("{}:'{}': {}", err_msg, queue_name, e))
+                    BroccoliError::Broker(format!("{err_msg}:'{queue_name}': {e}"))
                 })?;
             Ok(message)
         }
         Err(e) => Err(BroccoliError::Broker(format!(
-            "{}:'{}': getting message id from index (wrong index record): {}",
-            err_msg, queue_name, e,
+            "{err_msg}:'{queue_name}': getting message id from index (wrong index record): {e}",
         ))),
     }
 }
@@ -358,7 +370,7 @@ async fn remove_from_queue_index(
     err_msg: &'static str,
 ) -> Result<(), BroccoliError> {
     let index_table = self::index_table(queue_name);
-    let index_record_str = format!("{}:[<uuid>'{}','{}']", index_table, task_id, queue_name);
+    let index_record_str = format!("{index_table}:[<uuid>'{task_id}','{queue_name}']");
     let index_record_id = RecordId::from_str(&index_record_str);
     match index_record_id {
         Ok(index_record) => {
@@ -366,25 +378,23 @@ async fn remove_from_queue_index(
                 .delete(index_record)
                 .await
                 .map_err(|e: surrealdb::Error| {
-                    BroccoliError::Broker(format!("{}:'{}': {}", err_msg, queue_name, e))
+                    BroccoliError::Broker(format!("{err_msg}:'{queue_name}': {e}"))
                 })?;
             match deleted {
                 Some(_) => Ok(()), // happy path
                 None => Err(BroccoliError::Broker(format!(
-                    "{}:'{}': removing from queue index (silently did not add)",
-                    err_msg, queue_name,
+                    "{err_msg}:'{queue_name}': removing from queue index (silently did not add)",
                 ))),
             }
         }
         Err(e) => Err(BroccoliError::Broker(format!(
-            "{}:'{}': removing from queue index (wrong index record): {}",
-            err_msg, queue_name, e,
+            "{err_msg}:'{queue_name}': removing from queue index (wrong index record): {e}",
         ))),
     }
 }
 
 /// get first queued message if any, non-blocking
-pub(crate) async fn get_queued(
+pub async fn get_queued(
     db: &Surreal<Any>,
     queue_name: &str,
     err_msg: &'static str,
@@ -398,29 +408,24 @@ pub(crate) async fn get_queued(
         .await
         .map_err(|e| {
             BroccoliError::Broker(format!(
-                "{}:'{}' Could not get queued: {}",
-                err_msg, queue_name, e
+                "{err_msg}:'{queue_name}' Could not get queued: {e}"
             ))
         })?;
     let queued = queued.take(0);
     match queued {
         Ok(queued) => {
             let queued: Option<InternalSurrealDBBrokerQueuedMessageRecord> = queued;
-            match queued {
-                Some(queued) => Ok(Some(queued.to_owned())),
-                None => Ok(None), // nothing was queued
-            }
+            queued.map_or_else(|| Ok(None), |queued| Ok(Some(queued)))
         }
         Err(e) => Err(BroccoliError::Broker(format!(
-            "{}:'{}' Could not get queued (taking value): {}",
-            err_msg, queue_name, e
+            "{err_msg}:'{queue_name}' Could not get queued (taking value): {e}"
         ))),
     }
 }
 
 /// remove from ordered queue
-/// queued_message_id must be: queue:[timestamp, task_id]
-pub(crate) async fn remove_from_queue(
+/// `queued_message_id` must be: queue:[timestamp, `task_id`]
+pub async fn remove_from_queue(
     db: &Surreal<Any>,
     queue_name: &str,
     queued_message_id: RecordId, // queue:[timestamp, task_id]
@@ -429,21 +434,22 @@ pub(crate) async fn remove_from_queue(
     let deleted: Option<InternalSurrealDBBrokerQueuedMessage> = db
         .delete(queued_message_id)
         .await
-        .map_err(|e| BroccoliError::Broker(format!("{}:'{}': {}", err_msg, queue_name, e)))?;
-    match deleted {
-        Some(message) => Ok(message),
-        None => Err(BroccoliError::Broker(format!(
-            "{}:'{}': Removing from queue (silently nothing was removed)",
-            err_msg, queue_name,
-        ))),
-    }
+        .map_err(|e| BroccoliError::Broker(format!("{err_msg}:'{queue_name}': {e}")))?;
+    deleted.map_or_else(
+        || {
+            Err(BroccoliError::Broker(format!(
+                "{err_msg}:'{queue_name}': Removing from queue (silently nothing was removed)",
+            )))
+        },
+        Ok,
+    )
 }
 
 /// given the user facing task id, remove from the queue
-pub(crate) async fn remove_queued_from_index(
+pub async fn remove_queued_from_index(
     db: &Surreal<Any>,
     queue_name: &str,
-    task_id: &String,
+    task_id: &str,
     err_msg: &'static str,
 ) -> Result<Option<InternalSurrealDBBrokerQueuedMessage>, BroccoliError> {
     let queue_index = self::get_queue_index(db, queue_name, task_id, err_msg).await?;
@@ -458,7 +464,7 @@ pub(crate) async fn remove_queued_from_index(
 }
 
 /// add the message itself with it's payload
-pub(crate) async fn add_message(
+pub async fn add_message(
     db: &Surreal<Any>,
     queue_name: &str,
     msg: &InternalBrokerMessage,
@@ -472,19 +478,20 @@ pub(crate) async fn add_message(
         ))
         .await
         .map_err(|e: surrealdb::Error| {
-            BroccoliError::Broker(format!("{}:'{}': {}", err_msg, queue_name, e))
+            BroccoliError::Broker(format!("{err_msg}:'{queue_name}': {e}"))
         })?;
-    match added {
-        Some(added) => Ok(added.into()),
-        None => Err(BroccoliError::Broker(format!(
-            "{}: adding message (silently did not add anything)",
-            err_msg,
-        ))),
-    }
+    added.map_or_else(
+        || {
+            Err(BroccoliError::Broker(format!(
+                "{err_msg}: adding message (silently did not add anything)",
+            )))
+        },
+        |added| Ok(added.into()),
+    )
 }
 
 /// update the message, done to update the number of attempts, leaving rest unchanged
-pub(crate) async fn update_message(
+pub async fn update_message(
     db: &Surreal<Any>,
     queue_name: &str,
     msg: InternalBrokerMessage,
@@ -495,19 +502,18 @@ pub(crate) async fn update_message(
         .content(InternalSurrealDBBrokerMessage::from(queue_name, msg))
         .await
         .map_err(|e: surrealdb::Error| {
-            BroccoliError::Broker(format!("{}:'{}': {}", err_msg, queue_name, e))
+            BroccoliError::Broker(format!("{err_msg}:'{queue_name}': {e}"))
         })?;
     match updated {
         Some(_) => Ok(()),
         None => Err(BroccoliError::Broker(format!(
-            "{}:'{}': Updating message (silently no update)",
-            err_msg, queue_name
+            "{err_msg}:'{queue_name}': Updating message (silently no update)"
         ))),
     }
 }
 
 /// get the message payload given the queue record
-pub(crate) async fn get_message_from(
+pub async fn get_message_from(
     db: &Surreal<Any>,
     queue_name: &str,
     queued_message: InternalSurrealDBBrokerQueuedMessageRecord,
@@ -518,8 +524,8 @@ pub(crate) async fn get_message_from(
 }
 
 /// get the actual message
-/// message_id <queue_table>:[<task_id>]
-pub(crate) async fn get_message(
+/// `message_id` <`queue_table>`:[<`task_id`>]
+pub async fn get_message(
     db: &Surreal<Any>,
     queue_name: &str,
     message_id: RecordId,
@@ -528,20 +534,21 @@ pub(crate) async fn get_message(
     let message: Option<InternalSurrealDBBrokerMessage> = db
         .select(message_id)
         .await
-        .map_err(|e| BroccoliError::Broker(format!("{}:'{}': {}", err_msg, queue_name, e)))?;
-    match message {
-        Some(message) => Ok(message.into()),
-        None => Err(BroccoliError::Broker(format!(
-            "{}:'{}': getting message (silently did not get anything)",
-            err_msg, queue_name
-        ))),
-    }
+        .map_err(|e| BroccoliError::Broker(format!("{err_msg}:'{queue_name}': {e}")))?;
+    message.map_or_else(
+        || {
+            Err(BroccoliError::Broker(format!(
+                "{err_msg}:'{queue_name}': getting message (silently did not get anything)"
+            )))
+        },
+        |message| Ok(message.into()),
+    )
 }
 
 /// remove actual message (the one with the payload)
 /// we also remove it from the internal index
-/// message_id: <queue_table>:[<task_id>]
-pub(crate) async fn remove_message(
+/// `message_id`: <`queue_table>`:[<`task_id`>]
+pub async fn remove_message(
     db: &Surreal<Any>,
     queue_name: &str,
     message_id: RecordId, //<queue_table>:[<task_id>]
@@ -551,22 +558,21 @@ pub(crate) async fn remove_message(
     let resp: Option<InternalSurrealDBBrokerMessage> = db
         .delete(message_id)
         .await
-        .map_err(|e| BroccoliError::Broker(format!("{}:'{}': {}", err_msg, queue_name, e)))?;
+        .map_err(|e| BroccoliError::Broker(format!("{err_msg}:'{queue_name}': {e}")))?;
     match resp {
         Some(_) => {
             // remove from index
-            let _ = self::remove_from_queue_index(db, queue_name, task_id, err_msg).await?;
+            let () = self::remove_from_queue_index(db, queue_name, task_id, err_msg).await?;
             Ok(())
         }
         None => Err(BroccoliError::Broker(format!(
-            "{}: removing message (silently did not remove anything)",
-            err_msg
+            "{err_msg}: removing message (silently did not remove anything)"
         ))),
     }
 }
 
 /// add to processing queue
-pub(crate) async fn add_to_processing(
+pub async fn add_to_processing(
     db: &Surreal<Any>,
     queue_name: &str,
     queued_message: InternalSurrealDBBrokerQueuedMessageRecord,
@@ -583,18 +589,17 @@ pub(crate) async fn add_to_processing(
             priority,
         })
         .await
-        .map_err(|e| BroccoliError::Broker(format!("{}:'{}': {}", err_msg, queue_name, e)))?;
+        .map_err(|e| BroccoliError::Broker(format!("{err_msg}:'{queue_name}': {e}")))?;
     match processing {
         Some(_) => Ok(()),
         None => Err(BroccoliError::Broker(format!(
-            "{}:'{}': adding to processing (silently did not add anything)",
-            err_msg, queue_name
+            "{err_msg}:'{queue_name}': adding to processing (silently did not add anything)"
         ))),
     }
 }
 
 /// remove from the processing queue
-pub(crate) async fn remove_from_processing(
+pub async fn remove_from_processing(
     db: &Surreal<Any>,
     queue_name: &str,
     message_id: &String,
@@ -604,18 +609,19 @@ pub(crate) async fn remove_from_processing(
     let processed: Option<InternalSurrealDBBrokerProcessingMessage> = db
         .delete((processing_table, message_id))
         .await
-        .map_err(|e| BroccoliError::Broker(format!("{}:'{}' {}", err_msg, queue_name, e)))?;
-    match processed {
-        Some(processed) => Ok(processed),
-        None => Err(BroccoliError::Broker(format!(
-            "{}:'{}' removing from processing (silently did not remove anything)",
-            err_msg, queue_name
-        ))),
-    }
+        .map_err(|e| BroccoliError::Broker(format!("{err_msg}:'{queue_name}' {e}")))?;
+    processed.map_or_else(
+        || {
+            Err(BroccoliError::Broker(format!(
+            "{err_msg}:'{queue_name}' removing from processing (silently did not remove anything)"
+        )))
+        },
+        Ok,
+    )
 }
 
 /// add to the failed queue, will also remove from index
-pub(crate) async fn add_to_failed(
+pub async fn add_to_failed(
     db: &Surreal<Any>,
     queue_name: &str,
     msg: InternalBrokerMessage,
@@ -628,12 +634,11 @@ pub(crate) async fn add_to_failed(
             original_msg: InternalSurrealDBBrokerMessage::from(queue_name, msg),
         })
         .await
-        .map_err(|e| BroccoliError::Broker(format!("{}:'{}' {}", err_msg, queue_name, e)))?;
+        .map_err(|e| BroccoliError::Broker(format!("{err_msg}:'{queue_name}' {e}")))?;
     match failed {
         Some(_) => Ok(()),
         None => Err(BroccoliError::Broker(format!(
-            "{}:'{}': adding to failed (silently did not add anything)",
-            err_msg, queue_name
+            "{err_msg}:'{queue_name}': adding to failed (silently did not add anything)"
         ))),
     }
 }
@@ -644,17 +649,4 @@ where
     T: Into<OffsetDateTime>,
 {
     dt.into().format(&Rfc3339)
-}
-
-#[cfg(test)]
-#[tokio::test]
-async fn new_with_url_test() {
-    let url = Url::parse("ws://127.0.0.1/?username=user&password=passwd&ns=namespace&dtabase=db")
-        .unwrap();
-    let username = SurrealDBBroker::get_param_value(&url, "username").unwrap();
-    assert_eq!("user", username);
-    let password = SurrealDBBroker::get_param_value(&url, "password").unwrap();
-    assert_eq!("passwd", password);
-    let err = SurrealDBBroker::get_param_value(&url, "foo");
-    assert!(err.is_err());
 }
