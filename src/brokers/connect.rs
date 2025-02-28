@@ -84,10 +84,9 @@ pub async fn connect_to_broker(
             RabbitMQBroker::new_with_config(config)
         })),
         #[cfg(feature = "surrealdb")]
-        BrokerType::SurrealDB => Box::new(match config {
-            Some(config) => SurrealDBBroker::new_with_config(config),
-            None => SurrealDBBroker::new(),
-        }),
+        BrokerType::SurrealDB => Box::new(config.map_or_else(SurrealDBBroker::new, |config| {
+            SurrealDBBroker::new_with_config(config)
+        })),
     };
 
     broker.connect(broker_url).await?;

@@ -189,7 +189,7 @@ pub struct ConsumeOptions {
     /// Whether to consume from a fairness queue or not. This is only supported by the Redis Broker.
     pub fairness: Option<bool>,
     /// how long to wait in tight consumer loops, defaults to zero for `process_messages` and `process_messages_with_handlers`,
-    /// and 500ms for `consume`, which allows those functions to be stopped in a tokkio::spawn thread
+    /// and 500ms for `consume`, which allows those functions to be stopped in a `tokkio::spawn` thread
     pub consume_wait: Option<std::time::Duration>,
     // unfortunately, since the options builder can be used in a constant setting, we cannot
     // add a CancellationToken as an option which would be great way to stop gracefully
@@ -601,6 +601,9 @@ impl BroccoliQueue {
     ///
     /// # Returns
     /// A `Result` indicating success or failure.
+    ///
+    /// # Errors
+    /// If the message fails to cancel, a `BroccoliError` will be returned.
     pub async fn cancel(&self, topic: &str, message_id: String) -> Result<(), BroccoliError> {
         self.broker
             .cancel(topic, message_id)
