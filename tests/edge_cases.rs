@@ -196,7 +196,7 @@ lazy_static! {
     static ref succeeded: Arc<tokio::sync::Mutex<usize>> = Arc::new(Mutex::new(0));
 }
 
-async fn process_job(msg: TestMessage) -> Result<(), BroccoliError> {
+async fn process_job(_: TestMessage) -> Result<(), BroccoliError> {
     // helper function to test process_messages
     let mut lock = handled.lock().await;
     *lock += 1;
@@ -325,9 +325,8 @@ async fn test_ttl_not_implemented() {
         .publish(test_topic, None, &message, Some(options))
         .await;
 
-    match result {
-        Ok(_) => assert!(false, "Should be unimplemented"),
-        Err(_) => assert!(true),
+    if result.is_ok() {
+        panic!("Should be unimplemented")
     }
 }
 
