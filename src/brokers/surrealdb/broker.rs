@@ -178,6 +178,7 @@ impl Broker for SurrealDBBroker {
     }
 
     /// Attempts to consume a message from the specified queue.
+    /// Cost is O(NlogN) with N being the number of pending messages to be consumed
     ///
     /// # Arguments
     /// * `queue_name` - The name of the queue.

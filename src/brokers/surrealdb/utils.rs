@@ -401,7 +401,7 @@ pub async fn get_queued(
     err_msg: &'static str,
 ) -> Result<Option<InternalSurrealDBBrokerQueuedMessageRecord>, BroccoliError> {
     let queue_table = self::queue_table(queue_name);
-    let q = "SELECT * FROM type::thing($queue_table,type::range([[None,None],[time::now(),None]])) ORDER BY priority ASC LIMIT 1";
+    let q = "SELECT * FROM (SELECT * FROM type::thing($queue_table,type::range([[None,None],[time::now(),None]]))) ORDER BY priority,id[0] ASC LIMIT 1";
     let mut queued: Response = db
         .query(q)
         .bind(("queue_table", queue_table))
