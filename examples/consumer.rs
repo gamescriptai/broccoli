@@ -65,7 +65,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             Some(5),
             None,
             |msg| async move { process_job(msg.payload).await },
-            |msg| async { success_handler(msg.payload).await },
+            |msg, result| async { success_handler(msg.payload).await },
             |msg, err| async { error_handler(msg.payload, err).await },
         )
         .await?;

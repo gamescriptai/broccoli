@@ -797,7 +797,7 @@ impl BroccoliQueue {
     ///
     /// # Errors
     /// If the message fails to process, a `BroccoliError` will be returned.
-    pub async fn process_messages_with_handlers<T, F, MessageFut, SuccessFut, ErrorFut, S, E>(
+    pub async fn process_messages_with_handlers<T, F, MessageFut, SuccessFut, ErrorFut, S, E, R>(
         &self,
         topic: &str,
         concurrency: Option<usize>,
@@ -809,8 +809,9 @@ impl BroccoliQueue {
     where
         T: serde::de::DeserializeOwned + Send + Clone + serde::Serialize + 'static,
         F: Fn(BrokerMessage<T>) -> MessageFut + Send + Sync + Clone + 'static,
-        MessageFut: Future<Output = Result<(), BroccoliError>> + Send + 'static,
-        S: Fn(BrokerMessage<T>) -> SuccessFut + Send + Sync + Clone + 'static,
+        MessageFut: Future<Output = Result<R, BroccoliError>> + Send + 'static,
+        R: Send + Clone + 'static,
+        S: Fn(BrokerMessage<T>, R) -> SuccessFut + Send + Sync + Clone + 'static,
         SuccessFut: Future<Output = Result<(), BroccoliError>> + Send + 'static,
         E: Fn(BrokerMessage<T>, BroccoliError) -> ErrorFut + Send + Sync + Clone + 'static,
         ErrorFut: Future<Output = Result<(), BroccoliError>> + Send + 'static,
@@ -843,13 +844,14 @@ impl BroccoliQueue {
                                     continue;
                                 };
                                 match message_handler(broker_message.clone()).await {
-                                    Ok(()) => {
-                                        let _ = on_success(broker_message).await.map_err(|e| {
-                                            log::error!(
-                                                "Success Handler to process message: {:?}",
-                                                e
-                                            );
-                                        });
+                                    Ok(result) => {
+                                        let _ =
+                                            on_success(broker_message, result).await.map_err(|e| {
+                                                log::error!(
+                                                    "Success Handler to process message: {:?}",
+                                                    e
+                                                );
+                                            });
                                         let _ = broker.acknowledge(&topic, message).await.map_err(
                                             |e| {
                                                 log::error!(
@@ -891,10 +893,12 @@ impl BroccoliQueue {
                     })?;
 
                 match message_handler(message.into_message()?).await {
-                    Ok(()) => {
-                        let _ = on_success(message.into_message()?).await.map_err(|e| {
-                            log::error!("Success Handler to process message: {:?}", e);
-                        });
+                    Ok(result) => {
+                        let _ = on_success(message.into_message()?, result)
+                            .await
+                            .map_err(|e| {
+                                log::error!("Success Handler to process message: {:?}", e);
+                            });
                         let _ = self
                             .broker
                             .acknowledge(topic, message)

@@ -1,6 +1,6 @@
 [package]
 name = "broccoli_queue"
-version = "0.3.3"
+version = "0.4.0"
 edition = "2021"
 license = "MIT"
 description = "Broccoli is a simple, fast, and reliable job queue for Rust."
@@ -45,3 +45,8 @@ test-fairness = []
 [[bench]]
 name = "queue_benchmark"
 harness = false
+
+# Add this section for docs.rs
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
