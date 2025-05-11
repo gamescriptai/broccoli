@@ -688,7 +688,8 @@ impl BroccoliQueue {
                                             },
                                         );
                                     }
-                                    Err(_) => {
+                                    Err(e) => {
+                                        log::error!("Failed to process message: {:?}", e);
                                         // Message processing failed
                                         let _ = broker.reject(&topic, message).await.map_err(|e| {
                                             log::error!("Failed to reject message: {:?}", e);
@@ -721,7 +722,8 @@ impl BroccoliQueue {
                             log::error!("Failed to acknowledge message: {:?}", e);
                         });
                     }
-                    Err(_) => {
+                    Err(e) => {
+                        log::error!("Failed to process message: {:?}", e);
                         // Message processing failed
                         let _ = self.broker.reject(topic, message).await.map_err(|e| {
                             log::error!("Failed to reject message: {:?}", e);
@@ -862,6 +864,7 @@ impl BroccoliQueue {
                                         );
                                     }
                                     Err(e) => {
+                                        log::error!("Failed to process message: {:?}", e);
                                         let _ = on_error(broker_message, e).await.map_err(|e| {
                                             log::error!(
                                                 "Error Handler to process message: {:?}",
@@ -906,6 +909,7 @@ impl BroccoliQueue {
                             .map_err(|e| log::error!("Failed to acknowledge message: {:?}", e));
                     }
                     Err(e) => {
+                        log::error!("Failed to process message: {:?}", e);
                         let _ = on_error(message.into_message()?, e)
                             .await
                             .map_err(|e| log::error!("Error Handler to process message: {:?}", e));
