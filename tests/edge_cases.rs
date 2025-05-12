@@ -222,7 +222,7 @@ async fn test_process_messages() {
     // launch consumer first
     let consumer = tokio::spawn(async move {
         let _ = consumer_queue
-            .process_messages("test_process_messages_topic", Some(2), None, |msg| async {
+            .process_messages("test_process_messages_topic", None, None, |msg| async {
                 process_job(msg.payload).await
             })
             .await;
@@ -269,7 +269,7 @@ async fn test_process_messages_with_handlers() {
                 None, //Some(4),
                 None,
                 |msg| async move { process_job(msg.payload).await },
-                |msg, result| async { success_handler(msg.payload).await },
+                |msg, _result| async { success_handler(msg.payload).await },
                 |msg, err| async { error_handler(msg.payload, err).await },
             )
             .await;
