@@ -15,9 +15,12 @@ use crate::error::BroccoliError;
 
 use super::broker::InternalSurrealDBBrokerFailedMessage;
 use super::broker::InternalSurrealDBBrokerMessage;
+/*
 use super::broker::InternalSurrealDBBrokerProcessingMessage;
 use super::broker::InternalSurrealDBBrokerQueuedMessage;
+*/
 use super::broker::InternalSurrealDBBrokerQueuedMessageRecord;
+use super::broker::InternalSurrealDBBrokerdMessageEntry;
 use super::SurrealDBBroker;
 
 #[derive(Default)]
@@ -294,9 +297,9 @@ async fn add_record_to_queue(
 ) -> Result<(), BroccoliError> {
     let queue_record_id = queue_record_id(queue_name, &when, task_id)?;
     let message_record_id: RecordId = (queue_name, task_id).into();
-    let qm: Option<InternalSurrealDBBrokerQueuedMessage> = db
+    let qm: Option<InternalSurrealDBBrokerdMessageEntry> = db
         .create(queue_record_id.clone())
-        .content(InternalSurrealDBBrokerQueuedMessage {
+        .content(InternalSurrealDBBrokerdMessageEntry {
             message_id: message_record_id,
             priority,
         })
@@ -431,8 +434,8 @@ pub async fn remove_from_queue(
     queue_name: &str,
     queued_message_id: RecordId, // queue:[timestamp, task_id]
     err_msg: &'static str,
-) -> Result<InternalSurrealDBBrokerQueuedMessage, BroccoliError> {
-    let deleted: Option<InternalSurrealDBBrokerQueuedMessage> = db
+) -> Result<InternalSurrealDBBrokerdMessageEntry, BroccoliError> {
+    let deleted: Option<InternalSurrealDBBrokerdMessageEntry> = db
         .delete(queued_message_id)
         .await
         .map_err(|e| BroccoliError::Broker(format!("{err_msg}:'{queue_name}': {e}")))?;
@@ -452,7 +455,7 @@ pub async fn remove_queued_from_index(
     queue_name: &str,
     task_id: &str,
     err_msg: &'static str,
-) -> Result<Option<InternalSurrealDBBrokerQueuedMessage>, BroccoliError> {
+) -> Result<Option<InternalSurrealDBBrokerdMessageEntry>, BroccoliError> {
     let queue_index = self::get_queue_index(db, queue_name, task_id, err_msg).await?;
     match queue_index {
         Some(queue_index) => {
@@ -583,9 +586,9 @@ pub async fn add_to_processing(
     let message_id = queued_message.message_id;
     let uuid = message_id.key().clone();
     let priority = queued_message.priority;
-    let processing: Option<InternalSurrealDBBrokerProcessingMessage> = db
+    let processing: Option<InternalSurrealDBBrokerdMessageEntry> = db
         .create((processing_table, uuid))
-        .content(InternalSurrealDBBrokerProcessingMessage {
+        .content(InternalSurrealDBBrokerdMessageEntry {
             message_id,
             priority,
         })
@@ -605,9 +608,9 @@ pub async fn remove_from_processing(
     queue_name: &str,
     message_id: &String,
     err_msg: &'static str,
-) -> Result<InternalSurrealDBBrokerProcessingMessage, BroccoliError> {
+) -> Result<InternalSurrealDBBrokerdMessageEntry, BroccoliError> {
     let processing_table = self::processing_table(queue_name);
-    let processed: Option<InternalSurrealDBBrokerProcessingMessage> = db
+    let processed: Option<InternalSurrealDBBrokerdMessageEntry> = db
         .delete((processing_table, message_id))
         .await
         .map_err(|e| BroccoliError::Broker(format!("{err_msg}:'{queue_name}' {e}")))?;

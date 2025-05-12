@@ -39,20 +39,14 @@ pub(crate) struct InternalSurrealDBBrokerMessage {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct InternalSurrealDBBrokerQueuedMessageRecord {
     pub(crate) id: RecordId, // this is the queue record id [timestamp, message id]
-    pub(crate) message_id: RecordId, // this is the message id: queue_name:task_id
+    pub(crate) message_id: RecordId, // this is the message id: `queue_name:task_id``
     pub(crate) priority: i64, // message priority copy, to use for sorting in consumption
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub(crate) struct InternalSurrealDBBrokerQueuedMessage {
-    pub(crate) message_id: RecordId, // this is the message id: queue_name:task_id
+pub(crate) struct InternalSurrealDBBrokerdMessageEntry {
+    pub(crate) message_id: RecordId, // this is the message id: `queue_name:task_id``
     pub(crate) priority: i64,        // message priority copy, to use for sorting in consumption
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub(crate) struct InternalSurrealDBBrokerProcessingMessage {
-    pub(crate) message_id: RecordId, // this is the message id: queue_name:task_id
-    pub(crate) priority: i64,        // if we reenqueue, we set the same priority
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -255,7 +249,7 @@ impl Broker for SurrealDBBroker {
         options: Option<ConsumeOptions>,
     ) -> Result<InternalBrokerMessage, BroccoliError> {
         // first of all, we try to consume without blocking, and return if we have messages
-        let resp = Self::try_consume(self, queue_name, options).await?;
+        let resp = Self::try_consume(self, queue_name, options.clone()).await?;
         if let Some(message) = resp {
             return Ok(message);
         }
@@ -263,6 +257,7 @@ impl Broker for SurrealDBBroker {
         // if there were no messages, we block using a live query and wait
         let db = self.check_connected()?;
         let queue_table = utils::queue_table(queue_name);
+        let auto_ack = options.is_some_and(|x| x.auto_ack.unwrap_or(false));
         let mut stream = db
             .select(queue_table)
             .range(
@@ -297,13 +292,39 @@ impl Broker for SurrealDBBroker {
             }
         }
         match queued_message {
-            Ok(message) => Ok(utils::get_message_from(
-                &db,
-                queue_name,
-                message,
-                "Could not consume (retrieving message) ",
-            )
-            .await?),
+            Ok(message) => {
+                //////// CRITICAL AREA START //////
+                let _lock = consume_mutex.lock().await;
+
+                utils::remove_from_queue(
+                    &db,
+                    queue_name,
+                    message.id.clone(),
+                    "Could not live consume (removing from queue)",
+                )
+                .await?;
+                let _lock: Option<u8> = None;
+                //////// CRITICAL AREA ENDS (Some branch) //////
+
+                if !auto_ack {
+                    //// 4: add to processing queue ////
+                    utils::add_to_processing(
+                        &db,
+                        queue_name,
+                        message.clone(),
+                        "Could not live consume (add to processing)",
+                    )
+                    .await?;
+                }
+
+                Ok(utils::get_message_from(
+                    &db,
+                    queue_name,
+                    message,
+                    "Could not consume (retrieving message) ",
+                )
+                .await?)
+            }
             Err(e) => Err(e),
         }
     }
