@@ -268,8 +268,8 @@ async fn test_process_messages_with_handlers() {
                 "test_process_messages_with_handlers_topic",
                 None, //Some(4),
                 None,
-                |msg| async { process_job(msg.payload).await },
-                |msg| async { success_handler(msg.payload).await },
+                |msg| async move { process_job(msg.payload).await },
+                |msg, result| async { success_handler(msg.payload).await },
                 |msg, err| async { error_handler(msg.payload, err).await },
             )
             .await;
