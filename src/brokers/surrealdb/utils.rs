@@ -220,7 +220,7 @@ fn queue_record_id(queue_name: &str, when: &str, task_id: &str) -> Result<Record
 }
 
 /// `index_table`:[<uuid>`task_id`, `queue_name`]
-/// could simplify to index only by task_id but the queue name is useful for observability purposes
+/// could simplify to index only by `task_id` but the queue name is useful for observability purposes
 fn index_record_id(task_id: &str, queue_name: &str) -> Result<RecordId, BroccoliError> {
     let index_table = self::index_table(queue_name);
     let index_record_str = format!("{index_table}:[<uuid>'{task_id}','{queue_name}']");
