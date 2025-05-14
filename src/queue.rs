@@ -527,7 +527,7 @@ impl BroccoliQueue {
     /// If the message fails to consume, a `BroccoliError` will be returned.
     pub async fn try_consume<T: Clone + serde::Serialize + serde::de::DeserializeOwned>(
         &self,
-        topic: &'static str,
+        topic: &str,
         options: Option<ConsumeOptions>,
     ) -> Result<Option<BrokerMessage<T>>, BroccoliError> {
         let serialized_message = self
@@ -556,7 +556,7 @@ impl BroccoliQueue {
     /// If the message fails to acknowledge, a `BroccoliError` will be returned.
     pub async fn acknowledge<T: Clone + serde::Serialize + serde::de::DeserializeOwned>(
         &self,
-        topic: &'static str,
+        topic: &str,
         message: BrokerMessage<T>,
     ) -> Result<(), BroccoliError> {
         self.broker
