@@ -186,9 +186,34 @@ impl Broker for SurrealDBBroker {
         options: Option<ConsumeOptions>,
     ) -> Result<Option<InternalBrokerMessage>, BroccoliError> {
         let db = self.check_connected()?;
+        //////// CRITICAL AREA START //////
+        let mut _lock = consume_mutex.lock().await;
+        *_lock += 1;
+        if *_lock != 1 {
+            log::warn!("Incorrect lock value consuming {}: {}", queue_name, &_lock);
+        }
+        let auto_ack = options.is_some_and(|x| x.auto_ack.unwrap_or(false));
+        let payload = utils::get_queued_transaction(
+            &db,
+            queue_name,
+            auto_ack,
+            "Coul not try consume (transaction)",
+        )
+        .await;
+        *_lock -= 1;
+        let _lock: Option<u8> = None;
+        //////// CRITICAL AREA ENDS //////
+
+        payload
+
+        /*
 
         //////// CRITICAL AREA START //////
-        let _lock = consume_mutex.lock().await;
+        let mut _lock = consume_mutex.lock().await;
+        *_lock += 1;
+        if *_lock != 1 {
+            log::warn!("Consume lock invalid value: {}", *_lock);
+        }
 
         //// 1: get message from queue ////
         let queued_message =
@@ -203,8 +228,6 @@ impl Broker for SurrealDBBroker {
                     "Could not try consume (removing from queue)",
                 )
                 .await?;
-                let _lock: Option<u8> = None;
-                //////// CRITICAL AREA ENDS (Some branch) //////
 
                 //// 3: if not autoack then add it to processing ////
                 let auto_ack = options.is_some_and(|x| x.auto_ack.unwrap_or(false));
@@ -218,6 +241,9 @@ impl Broker for SurrealDBBroker {
                     )
                     .await?;
                 }
+                *_lock -= 1;
+                let _lock: Option<u8> = None;
+                //////// CRITICAL AREA ENDS (Some branch) //////
 
                 //// 4: return the actual payload ////
                 let msg = utils::get_message_from(
@@ -232,8 +258,14 @@ impl Broker for SurrealDBBroker {
                     Err(e) => Err(e),
                 }
             }
-            None => Ok(None), //////// CRITICAL AREA ENDS (None branch) //////
+            None => {
+                *_lock -= 1;
+                let _lock: Option<u8> = None;
+                //////// CRITICAL AREA ENDS (None branch) //////
+                Ok(None)
+            }
         }
+         */
     }
 
     /// Consumes a message from the specified queue, blocking until a message is available.
@@ -283,7 +315,7 @@ impl Broker for SurrealDBBroker {
                         }
                     }
                     Err(error) => Some(Err(BroccoliError::Broker(format!(
-                        "Could not consume::'{queue_name}' {error}"
+                        "Could not consume:'{queue_name}' {error}"
                     )))),
                 };
             if let Some(message) = payload {
@@ -291,32 +323,36 @@ impl Broker for SurrealDBBroker {
                 break;
             }
         }
-        match queued_message {
+        //////// CRITICAL AREA START //////
+        let mut _lock = consume_mutex.lock().await;
+        *_lock += 1;
+        let out = match queued_message {
             Ok(message) => {
-                //////// CRITICAL AREA START //////
-                let _lock = consume_mutex.lock().await;
-
-                utils::remove_from_queue(
-                    &db,
-                    queue_name,
-                    message.id.clone(),
-                    "Could not live consume (removing from queue)",
-                )
-                .await?;
-                let _lock: Option<u8> = None;
-                //////// CRITICAL AREA ENDS (Some branch) //////
-
-                if !auto_ack {
-                    //// 4: add to processing queue ////
-                    utils::add_to_processing(
+                // if we have an error in the following operations, we decrement the lock counter
+                if auto_ack {
+                    utils::remove_from_queue(
+                        &db,
+                        queue_name,
+                        message.id.clone(),
+                        "Could not live consume (removing from queue)",
+                    )
+                    .await
+                    .inspect_err(|_| {
+                        *_lock -= 1;
+                    })?;
+                } else {
+                    utils::remove_from_queue_add_to_processed_transaction(
                         &db,
                         queue_name,
                         message.clone(),
-                        "Could not live consume (add to processing)",
+                        "Could not live consume (removing from queue and adding to processed)",
                     )
-                    .await?;
+                    .await
+                    .inspect_err(|_| {
+                        *_lock -= 1;
+                    })?;
                 }
-
+                *_lock -= 1;
                 Ok(utils::get_message_from(
                     &db,
                     queue_name,
@@ -326,7 +362,10 @@ impl Broker for SurrealDBBroker {
                 .await?)
             }
             Err(e) => Err(e),
-        }
+        };
+        let _lock: Option<u8> = None;
+        //////// CRITICAL AREA ENDS (Some branch) //////
+        out
     }
 
     /// Acknowledges the processing of a message, removing it from the processing queue.

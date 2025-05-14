@@ -729,6 +729,10 @@ impl BroccoliQueue {
                     future_handles.push(handle);
                 }
             } else {
+                let tid = tokio::task::id();
+                eprintln!("[{}] About to consume", &tid);
+                std::io::Write::flush(&mut std::io::stderr()).unwrap();
+
                 let message = self
                     .broker
                     .consume(topic, consume_options.clone())
@@ -737,6 +741,8 @@ impl BroccoliQueue {
                         log::error!("Failed to consume message: {:?}", e);
                         BroccoliError::Consume(format!("Failed to consume message: {e:?}"))
                     })?;
+                eprintln!("[{}] Consumed {:?}, about to run handler", &tid, &message);
+                std::io::Write::flush(&mut std::io::stderr()).unwrap();
 
                 match handler(message.into_message()?).await {
                     Ok(()) => {
@@ -788,7 +794,7 @@ impl BroccoliQueue {
     ///         Ok(())
     ///     }
     ///
-    ///     async fn on_success(message: BrokerMessage<JobPayload>) -> Result<(), BroccoliError> {
+    ///     async fn on_success(message: BrokerMessage<JobPayload>, _: ()) -> Result<(), BroccoliError> {
     ///         println!("Successfully processed message: {}", message.task_id);
     ///         Ok(())
     ///     }
@@ -863,6 +869,7 @@ impl BroccoliQueue {
 
                     let handle = tokio::spawn(async move {
                         loop {
+                            tokio::time::sleep(sleep).await;
                             let message = broker
                                 .consume(&topic, consume_options.clone())
                                 .await

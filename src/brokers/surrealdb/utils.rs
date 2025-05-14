@@ -15,10 +15,6 @@ use crate::error::BroccoliError;
 
 use super::broker::InternalSurrealDBBrokerFailedMessage;
 use super::broker::InternalSurrealDBBrokerMessage;
-/*
-use super::broker::InternalSurrealDBBrokerProcessingMessage;
-use super::broker::InternalSurrealDBBrokerQueuedMessage;
-*/
 use super::broker::InternalSurrealDBBrokerQueuedMessageRecord;
 use super::broker::InternalSurrealDBBrokerdMessageEntry;
 use super::SurrealDBBroker;
@@ -224,6 +220,7 @@ fn queue_record_id(queue_name: &str, when: &str, task_id: &str) -> Result<Record
 }
 
 /// `index_table`:[<uuid>`task_id`, `queue_name`]
+/// could simplify to index only by task_id but the queue name is useful for observability purposes
 fn index_record_id(task_id: &str, queue_name: &str) -> Result<RecordId, BroccoliError> {
     let index_table = self::index_table(queue_name);
     let index_record_str = format!("{index_table}:[<uuid>'{task_id}','{queue_name}']");
@@ -397,29 +394,57 @@ async fn remove_from_queue_index(
     }
 }
 
-/// get first queued message if any, non-blocking
-pub async fn get_queued(
+/// get first queued message payload if any, non-blocking, as part of a transaciton
+/// 1) get queued
+/// 2
+pub async fn get_queued_transaction(
     db: &Surreal<Any>,
     queue_name: &str,
+    auto_ack: bool,
     err_msg: &'static str,
-) -> Result<Option<InternalSurrealDBBrokerQueuedMessageRecord>, BroccoliError> {
+) -> Result<Option<InternalBrokerMessage>, BroccoliError> {
     let queue_table = self::queue_table(queue_name);
-    let q = "SELECT * FROM (SELECT * FROM type::thing($queue_table,type::range([[None,None],[time::now(),None]]))) ORDER BY priority,id[0] ASC LIMIT 1";
+    let processing_table = self::processing_table(queue_name);
+    let q = "
+            BEGIN TRANSACTION;
+            LET $m = SELECT * FROM ONLY (SELECT * FROM type::thing($queue_table,type::range([[None,None],[time::now(),None]]))) ORDER BY priority,id[0] ASC LIMIT 1;
+            IF !$auto_ack {
+                CREATE type::table($processing_table) CONTENT {
+                    id: type::thing($processing_table, $m.id[1]),
+                    message_id: $m.message_id,
+                    priority: $m.priority
+                };
+            };
+            -- remove from queue and return payload
+            -- remember we don't delete from index, instead acknowledge/reject/cancel will do it
+            DELETE $m.id;
+            LET $payload = SELECT * FROM  $m.message_id;
+            COMMIT TRANSACTION;
+            $payload;
+    ";
     let mut queued: Response = db
         .query(q)
         .bind(("queue_table", queue_table))
-        //.bind(("range", range))
+        .bind(("processing_table", processing_table))
+        .bind(("auto_ack", auto_ack))
         .await
         .map_err(|e| {
-            BroccoliError::Broker(format!(
-                "{err_msg}:'{queue_name}' Could not get queued: {e}"
-            ))
+            let e_str = e.to_string();
+            if e_str.contains("transaction") && e_str.contains("retried") {
+                BroccoliError::Broker(format!(
+                    "{err_msg}:'{queue_name}' Could not get queued, transaction error (likely a concurrent read on topic): {e}"
+                ))
+            } else {
+                BroccoliError::Broker(format!(
+                    "{err_msg}:'{queue_name}' Could not get queued in transaction: {e}"
+                ))
+            }
         })?;
-    let queued = queued.take(0);
+    let queued = queued.take(queued.num_statements() - 1);
     match queued {
         Ok(queued) => {
-            let queued: Option<InternalSurrealDBBrokerQueuedMessageRecord> = queued;
-            queued.map_or_else(|| Ok(None), |queued| Ok(Some(queued)))
+            let queued: Option<InternalSurrealDBBrokerMessage> = queued;
+            queued.map_or_else(|| Ok(None), |queued| Ok(Some(queued.into())))
         }
         Err(e) => Err(BroccoliError::Broker(format!(
             "{err_msg}:'{queue_name}' Could not get queued (taking value): {e}"
@@ -441,12 +466,99 @@ pub async fn remove_from_queue(
         .map_err(|e| BroccoliError::Broker(format!("{err_msg}:'{queue_name}': {e}")))?;
     deleted.map_or_else(
         || {
-            Err(BroccoliError::Broker(format!(
-                "{err_msg}:'{queue_name}': Removing from queue (silently nothing was removed)",
+            Err(BroccoliError::BrokerNonIdempotentOp(format!(
+                "{err_msg}:'{queue_name}': Removing from queue (silently nothing was removed, potentially a CONCURRENT_READ)",
             )))
         },
         Ok,
     )
+}
+
+/// remove from ordered queue and add to in process list within the same transaction
+/// (unused at the moment as it allows for concurrent reads)
+/// `queued_message_id` must be: queue:[timestamp, `task_id`]
+pub async fn remove_from_queue_add_to_processed_transaction(
+    db: &Surreal<Any>,
+    queue_name: &str,
+    queued_message: InternalSurrealDBBrokerQueuedMessageRecord,
+    err_msg: &'static str,
+) -> Result<Option<InternalSurrealDBBrokerQueuedMessageRecord>, BroccoliError> {
+    let queue_table = self::queue_table(queue_name);
+    let processing_table = self::processing_table(queue_name);
+    let message_id = queued_message.message_id; // reference to the original message
+    let queued_message_id = queued_message.id; // what gets deleted
+    let uuid = message_id.key().clone();
+    let priority = queued_message.priority;
+    let q = "
+            BEGIN TRANSACTION;
+                CREATE type::table($processing_table) CONTENT {
+                    id: type::thing($processing_table, <uuid>$uuid.String),
+                    message_id: $message_id,
+                    priority: $priority
+                };
+                CREATE transaction_log CONTENT {
+                    id_: <uuid>$uuid.String,
+                    processing_table:$processing_table,
+                    timestamp: time::now(),
+                };
+                -- if message is still in teh queue, remove it and return payload
+                -- otherwise we explicitly abort the transaction
+                -- (remember we don't delete from index, instead acknowledge/reject/cancel will do it)
+                --LET $m = SELECT * FROM $queued_message_id;
+                LET $m = DELETE $queued_message_id RETURN BEFORE;
+                IF !$m {
+                    THROW 'Transaction failed as '+ type::thing($queued_message_id)+' already deleted'
+                };
+            COMMIT TRANSACTION;
+            $m
+    ";
+    let resp = db
+        .query(q)
+        .bind(("queue_table", queue_table))
+        .bind(("processing_table", processing_table))
+        .bind(("message_id", message_id))
+        .bind(("queued_message_id", queued_message_id))
+        .bind(("uuid", uuid))
+        .bind(("priority", priority))
+        .await;
+    // capture the result, note that if there is an error that is related to a 'transaction' that can be 'retried''
+    // error scenarios:
+    // - likely concurrent reads:
+    //   - response.check() failed: any of the statements failed, which is namely the transaction or the deleted retrieval, in this case
+    //   - returned value error: getting $m itself failed, should not happen, but type safety
+    //   - returned value retrieved but none: DELETE did not return anything even though the transaction was successful
+    // - not concurrent read related:
+    //   - reponse error: most likely transport or infra related, not related to concurrent reads
+    match resp {
+        Ok(mut resp) => {
+            let returned: Result<
+                Option<InternalSurrealDBBrokerQueuedMessageRecord>,
+                surrealdb::Error,
+            > = resp.take(resp.num_statements() - 1);
+            let transaction = resp.check(); //take(0 as usize);
+            match transaction {
+                Ok(_) => {
+                    match returned {
+                        Ok(returned) => match returned {
+                            Some(returned) => Ok(Some(returned)),
+                            None => Err(BroccoliError::BrokerNonIdempotentOp(format!(
+                    "{err_msg}:'{queue_name}' Could not remove from queue in transaction (nothing was deleted, potentially a CONCURRENT_READ)"
+                ))),
+                        },
+                        Err(e) => Err(BroccoliError::BrokerNonIdempotentOp(format!(
+                    "{err_msg}:'{queue_name}' Could not remove from queue in transaction (taking deleted value, potentially a CONCURRENT_READ): {e}"
+                ))),
+                    }
+                },
+                Err(e) => Err(BroccoliError::BrokerNonIdempotentOp(format!(
+                    "{err_msg}:'{queue_name}' Could not remove from queue in transaction (transaction failed, potentially a CONCURRENT_READ): {e}"
+                ))),
+           }
+        }
+        Err(e) => Err(BroccoliError::Broker(format!(
+            "{err_msg}:'{queue_name}' Could not get queued in transaction: {e}"
+        ))),
+    }
 }
 
 /// given the user facing task id, remove from the queue
@@ -575,33 +687,6 @@ pub async fn remove_message(
     }
 }
 
-/// add to processing queue
-pub async fn add_to_processing(
-    db: &Surreal<Any>,
-    queue_name: &str,
-    queued_message: InternalSurrealDBBrokerQueuedMessageRecord,
-    err_msg: &'static str,
-) -> Result<(), BroccoliError> {
-    let processing_table = self::processing_table(queue_name);
-    let message_id = queued_message.message_id;
-    let uuid = message_id.key().clone();
-    let priority = queued_message.priority;
-    let processing: Option<InternalSurrealDBBrokerdMessageEntry> = db
-        .create((processing_table, uuid))
-        .content(InternalSurrealDBBrokerdMessageEntry {
-            message_id,
-            priority,
-        })
-        .await
-        .map_err(|e| BroccoliError::Broker(format!("{err_msg}:'{queue_name}': {e}")))?;
-    match processing {
-        Some(_) => Ok(()),
-        None => Err(BroccoliError::Broker(format!(
-            "{err_msg}:'{queue_name}': adding to processing (silently did not add anything)"
-        ))),
-    }
-}
-
 /// remove from the processing queue
 pub async fn remove_from_processing(
     db: &Surreal<Any>,
@@ -617,7 +702,7 @@ pub async fn remove_from_processing(
     processed.map_or_else(
         || {
             Err(BroccoliError::Broker(format!(
-            "{err_msg}:'{queue_name}' removing from processing (silently did not remove anything)"
+            "{err_msg}:'{queue_name}':{message_id} removing from processing (silently did not remove anything)"
         )))
         },
         Ok,
