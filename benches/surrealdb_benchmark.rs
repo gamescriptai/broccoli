@@ -1,3 +1,4 @@
+use std::env;
 use std::str::FromStr;
 use std::time::Instant;
 
@@ -27,26 +28,47 @@ struct BenchmarkMessageIndex {
     queue_id: RecordId, // queue:[timestamp,id]
 }
 
+fn read_param(s: &str) -> &str {
+    &s[s.find("=").unwrap()+1..]
+}
+
 async fn setup_surrealdb() -> Surreal<Any> {
-    let db = connect("ws://localhost:8001/rpc").await.unwrap();
-    db.signin(surrealdb::opt::auth::Root {
-        username: "root",
-        password: "root",
-    })
-    .await
-    .unwrap();
-    db.use_ns("test").use_db("broker").await.unwrap();
-    db
+    match env::var("SURREALDB_URL") {
+        Ok(url) => {
+            // it's annoying to make the utils package public just because of this so adding some shortcut code here
+            let i = url.find("?").unwrap();
+            let c = &url[0..i];
+            let url = &url[i..];
+            let url: Vec<&str> = url.split("&").collect();
+            let u = read_param(url[0]);
+            let p = read_param(url[1]);
+            let ns = read_param(url[2]);
+            let database = read_param(url[3]);
+            let db = connect(c).await.unwrap();
+            db.signin(surrealdb::opt::auth::Root {
+                username: u,
+                password: p,
+            })
+            .await
+            .unwrap();
+            db.use_ns(ns).use_db(database).await.unwrap();
+            db
+        }
+        Err(_) => panic!("Missing SURREALDB_URL env var (in order: ws://localhost:8001?username=<USERNAME>&password=<PASSWD>&ns=test&database=broker)"),
+    }
 }
 
 async fn setup_broccoli() -> BroccoliQueue {
-    BroccoliQueue::builder(
-        "ws://localhost:8001?username=root&password=root&ns=test&database=broker",
-    )
-    .pool_connections(10)
-    .build()
-    .await
-    .unwrap()
+    match env::var("SURREALDB_URL") {
+        Ok(url) => 
+        BroccoliQueue::builder(url)
+            .pool_connections(10)
+            .build()
+            .await
+            .unwrap()
+        ,
+        Err(_) => panic!("Missing SURREALDB_URL env var (in order: ws://localhost:8001?username=<USERNAME>&password=<PASSWD>&ns=test&database=broker)"),
+    }
 }
 
 async fn generate_test_messages(queue_name: &str, n: usize) -> Vec<BenchmarkMessage> {
