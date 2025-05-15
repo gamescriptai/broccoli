@@ -15,8 +15,8 @@ use crate::error::BroccoliError;
 
 use super::broker::InternalSurrealDBBrokerFailedMessage;
 use super::broker::InternalSurrealDBBrokerMessage;
+use super::broker::InternalSurrealDBBrokerMessageEntry;
 use super::broker::InternalSurrealDBBrokerQueuedMessageRecord;
-use super::broker::InternalSurrealDBBrokerdMessageEntry;
 use super::SurrealDBBroker;
 
 #[derive(Default)]
@@ -294,9 +294,9 @@ async fn add_record_to_queue(
 ) -> Result<(), BroccoliError> {
     let queue_record_id = queue_record_id(queue_name, &when, task_id)?;
     let message_record_id: RecordId = (queue_name, task_id).into();
-    let qm: Option<InternalSurrealDBBrokerdMessageEntry> = db
+    let qm: Option<InternalSurrealDBBrokerMessageEntry> = db
         .create(queue_record_id.clone())
-        .content(InternalSurrealDBBrokerdMessageEntry {
+        .content(InternalSurrealDBBrokerMessageEntry {
             message_id: message_record_id,
             priority,
         })
@@ -459,11 +459,11 @@ pub async fn remove_from_queue(
     queue_name: &str,
     queued_message_id: RecordId, // queue:[timestamp, task_id]
     err_msg: &'static str,
-) -> Result<InternalSurrealDBBrokerdMessageEntry, BroccoliError> {
-    let deleted: Option<InternalSurrealDBBrokerdMessageEntry> = db
-        .delete(queued_message_id)
-        .await
-        .map_err(|e| BroccoliError::Broker(format!("{err_msg}:'{queue_name}': {e}")))?;
+) -> Result<InternalSurrealDBBrokerMessageEntry, BroccoliError> {
+    let deleted: Option<InternalSurrealDBBrokerMessageEntry> =
+        db.delete(queued_message_id)
+            .await
+            .map_err(|e| BroccoliError::Broker(format!("{err_msg}:'{queue_name}': {e}")))?;
     deleted.map_or_else(
         || {
             Err(BroccoliError::BrokerNonIdempotentOp(format!(
@@ -495,11 +495,6 @@ pub async fn remove_from_queue_add_to_processed_transaction(
                     id: type::thing($processing_table, <uuid>$uuid.String),
                     message_id: $message_id,
                     priority: $priority
-                };
-                CREATE transaction_log CONTENT {
-                    id_: <uuid>$uuid.String,
-                    processing_table:$processing_table,
-                    timestamp: time::now(),
                 };
                 -- if message is still in teh queue, remove it and return payload
                 -- otherwise we explicitly abort the transaction
@@ -567,7 +562,7 @@ pub async fn remove_queued_from_index(
     queue_name: &str,
     task_id: &str,
     err_msg: &'static str,
-) -> Result<Option<InternalSurrealDBBrokerdMessageEntry>, BroccoliError> {
+) -> Result<Option<InternalSurrealDBBrokerMessageEntry>, BroccoliError> {
     let queue_index = self::get_queue_index(db, queue_name, task_id, err_msg).await?;
     match queue_index {
         Some(queue_index) => {
@@ -693,9 +688,9 @@ pub async fn remove_from_processing(
     queue_name: &str,
     message_id: &String,
     err_msg: &'static str,
-) -> Result<InternalSurrealDBBrokerdMessageEntry, BroccoliError> {
+) -> Result<InternalSurrealDBBrokerMessageEntry, BroccoliError> {
     let processing_table = self::processing_table(queue_name);
-    let processed: Option<InternalSurrealDBBrokerdMessageEntry> = db
+    let processed: Option<InternalSurrealDBBrokerMessageEntry> = db
         .delete((processing_table, message_id))
         .await
         .map_err(|e| BroccoliError::Broker(format!("{err_msg}:'{queue_name}' {e}")))?;

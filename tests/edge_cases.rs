@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use broccoli_queue::error::BroccoliError;
+use broccoli_queue::queue::ConsumeOptionsBuilder;
 use lazy_static::lazy_static;
 
 use broccoli_queue::queue::ConsumeOptions;

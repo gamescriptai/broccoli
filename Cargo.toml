@@ -37,6 +37,7 @@ url = { version = "2.5.4", optional = true }
 chrono = { version = "0.4.39", features = ["serde"] }
 env_logger = "0.11.5"
 criterion = { version = "0.5", features = ["async_tokio"] }
+tokio-util = "0.7.15"
 
 [features]
 default = []
@@ -51,6 +52,10 @@ harness = false
 
 [[bench]]
 name = "redis_benchmark"
+harness = false
+
+[[bench]]
+name = "surrealdb_benchmark"
 harness = false
 
 # Add this section for docs.rs

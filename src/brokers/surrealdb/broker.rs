@@ -44,7 +44,7 @@ pub(crate) struct InternalSurrealDBBrokerQueuedMessageRecord {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub(crate) struct InternalSurrealDBBrokerdMessageEntry {
+pub(crate) struct InternalSurrealDBBrokerMessageEntry {
     pub(crate) message_id: RecordId, // this is the message id: `queue_name:task_id``
     pub(crate) priority: i64,        // message priority copy, to use for sorting in consumption
 }

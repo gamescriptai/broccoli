@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 #[cfg(all(feature = "redis", feature = "test-fairness"))]
 use time::Duration;
 
+use broccoli_queue::queue::ConsumeOptionsBuilder;
+
 mod common;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
