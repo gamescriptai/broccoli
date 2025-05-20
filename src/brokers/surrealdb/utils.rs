@@ -94,42 +94,48 @@ impl SurrealDBBroker {
             database: Self::get_param_value(&url, "database")
                 .unwrap_or_else(|_| "test".to_string()),
         };
-        if !url.has_host() || !url.has_host() {
+
+        let scheme = url.scheme();
+        if scheme == "ws" && !url.has_host() {
             return Err(BroccoliError::Broker(
-                "Failed to coonect to SurrealDB: Missing scheme:://host".to_string(),
+                "Failed to coonect to SurrealDB: Missing ws://host or mem://".to_string(),
             ));
         }
-        let scheme = url.scheme();
-        if scheme != "ws" {
+        if scheme != "ws" && scheme != "mem" {
             return Err(BroccoliError::Broker(
-                "Failed to connect to SurrealDB: only ws:// is supported".to_string(),
+                "Failed to connect to SurrealDB: only ws:// or mem:// are supported".to_string(),
             ));
         }
         let port = url.port();
-        if port.is_none() {
+        if scheme == "ws" && port.is_none() {
             return Err(BroccoliError::Broker(
                 "Failed to connect to SurrealDB: missing port number".to_string(),
             ));
         }
+        let connection_url = if scheme == "ws" {
+            format!(
+                "ws://{}:{}/rpc",
+                url.host_str().unwrap_or("localhost"),
+                port.unwrap_or(8000)
+            )
+        } else {
+            "mem://".to_string()
+        };
 
-        let connection_url = format!(
-            "ws://{}:{}/rpc",
-            url.host_str().unwrap_or("localhost"),
-            port.unwrap_or(8000)
-        );
         let db = connect(connection_url)
             .await
             .map_err(|e| BroccoliError::Broker(format!("Failed to connect to SurrealDB: {e:?}")))?;
-
-        db.signin(surrealdb::opt::auth::Root {
-            username: &config.username,
-            password: &config.password,
-        })
-        .await
-        .map_err(|e| {
-            BroccoliError::Broker(format!("Incorrect credentials for SurrealDB: {e:?}"))
-        })?;
-
+        if scheme == "ws" {
+            // credentials not relevant for mem://
+            db.signin(surrealdb::opt::auth::Root {
+                username: &config.username,
+                password: &config.password,
+            })
+            .await
+            .map_err(|e| {
+                BroccoliError::Broker(format!("Incorrect credentials for SurrealDB: {e:?}"))
+            })?;
+        }
         // Select a specific namespace / database
         db.use_ns(config.ns)
             .use_db(config.database)
@@ -297,6 +303,7 @@ async fn add_record_to_queue(
     let qm: Option<InternalSurrealDBBrokerMessageEntry> = db
         .create(queue_record_id.clone())
         .content(InternalSurrealDBBrokerMessageEntry {
+            id: queue_record_id.clone(),
             message_id: message_record_id,
             priority,
         })

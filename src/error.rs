@@ -13,6 +13,7 @@ pub enum BroccoliError {
     Broker(String),
 
     /// Errors that occur during broker implementations related to concurrent operations not being idempotent
+    /// (Only appear when doing multiple parallel `SurrealDB` reads)
     ///
     /// # Examples
     /// - Multiple concurrent reads on the same topic
@@ -51,7 +52,7 @@ pub enum BroccoliError {
     #[error("Failed to reject message: {0}")]
     Reject(String),
 
-    /// Represents errors that occur during message cacnelling.
+    /// Represents errors that occur during message cancelling.
     ///
     /// # Examples
     /// - Failed to cancel message processing
@@ -79,9 +80,9 @@ pub enum BroccoliError {
     #[error("Redis error: {0}")]
     Redis(#[from] redis::RedisError),
 
-    /// Represents Redis-specific errors.
+    /// Represents SurrealDB-specific errors.
     ///
-    /// This variant wraps the underlying Redis error.
+    /// This variant wraps the underlying `SurrealDB` error.
     #[cfg(feature = "surrealdb")]
     #[error("SurrealDB error: {0}")]
     SurrealDB(#[from] surrealdb::Error),

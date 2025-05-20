@@ -246,7 +246,7 @@ impl ConsumeOptionsBuilder {
         self
     }
 
-    /// Sets whether to consume from a fairness queue.
+    /// Time to wait between iterations of tight consumer loops, so they can be interrupted (can be set to zero)
     #[must_use]
     pub const fn consume_wait(mut self, consume_wait: std::time::Duration) -> Self {
         self.consume_wait = Some(consume_wait);
@@ -496,7 +496,7 @@ impl BroccoliQueue {
     /// If the messages fail to consume, a `BroccoliError` will be returned.
     pub async fn consume_batch<T: Clone + serde::Serialize + serde::de::DeserializeOwned>(
         &self,
-        topic: &'static str,
+        topic: &str,
         batch_size: usize,
         timeout: Duration,
         options: Option<ConsumeOptions>,
@@ -680,6 +680,7 @@ impl BroccoliQueue {
             tokio::time::sleep(sleep).await;
             if let Some(concurrency) = concurrency {
                 while future_handles.len() < concurrency {
+                    tokio::time::sleep(sleep).await;
                     let broker = Arc::clone(&self.broker);
                     let topic = topic.to_string();
                     let handler = handler.clone();
@@ -687,6 +688,7 @@ impl BroccoliQueue {
 
                     let handle = tokio::spawn(async move {
                         loop {
+                            tokio::time::sleep(sleep).await;
                             let message = broker
                                 .consume(&topic, consume_options.clone())
                                 .await
@@ -729,10 +731,6 @@ impl BroccoliQueue {
                     future_handles.push(handle);
                 }
             } else {
-                let tid = tokio::task::id();
-                eprintln!("[{}] About to consume", &tid);
-                std::io::Write::flush(&mut std::io::stderr()).unwrap();
-
                 let message = self
                     .broker
                     .consume(topic, consume_options.clone())
@@ -741,8 +739,6 @@ impl BroccoliQueue {
                         log::error!("Failed to consume message: {:?}", e);
                         BroccoliError::Consume(format!("Failed to consume message: {e:?}"))
                     })?;
-                eprintln!("[{}] Consumed {:?}, about to run handler", &tid, &message);
-                std::io::Write::flush(&mut std::io::stderr()).unwrap();
 
                 match handler(message.into_message()?).await {
                     Ok(()) => {

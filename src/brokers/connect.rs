@@ -28,7 +28,7 @@ pub async fn connect_to_broker(
         BrokerType::Redis
     } else if broker_url.starts_with("amqp") {
         BrokerType::RabbitMQ
-    } else if broker_url.starts_with("ws") {
+    } else if broker_url.starts_with("ws") || broker_url.starts_with("mem") {
         BrokerType::SurrealDB
     } else {
         return Err(BroccoliError::Broker(
@@ -66,11 +66,11 @@ pub async fn connect_to_broker(
         not(feature = "redis"),
         not(feature = "rabbitmq")
     ))]
-    let broker_type = if broker_url.starts_with("ws") {
+    let broker_type = if broker_url.starts_with("ws") || broker_url.starts_with("mem") {
         BrokerType::SurrealDB
     } else {
         return Err(BroccoliError::Broker(
-            "Unsupported broker URL scheme".to_string(),
+            "Unsupported surrealdb broker URL scheme".to_string(),
         ));
     };
 

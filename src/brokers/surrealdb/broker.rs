@@ -45,6 +45,7 @@ pub(crate) struct InternalSurrealDBBrokerQueuedMessageRecord {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct InternalSurrealDBBrokerMessageEntry {
+    pub(crate) id: RecordId,
     pub(crate) message_id: RecordId, // this is the message id: `queue_name:task_id``
     pub(crate) priority: i64,        // message priority copy, to use for sorting in consumption
 }
@@ -197,7 +198,7 @@ impl Broker for SurrealDBBroker {
             &db,
             queue_name,
             auto_ack,
-            "Coul not try consume (transaction)",
+            "Could not try consume (transaction)",
         )
         .await;
         *_lock -= 1;
@@ -205,67 +206,6 @@ impl Broker for SurrealDBBroker {
         //////// CRITICAL AREA ENDS //////
 
         payload
-
-        /*
-
-        //////// CRITICAL AREA START //////
-        let mut _lock = consume_mutex.lock().await;
-        *_lock += 1;
-        if *_lock != 1 {
-            log::warn!("Consume lock invalid value: {}", *_lock);
-        }
-
-        //// 1: get message from queue ////
-        let queued_message =
-            utils::get_queued(&db, queue_name, "Could not try consume (get queued)").await?;
-        match queued_message {
-            Some(queued_message) => {
-                //// 2: delete it from queue ////
-                utils::remove_from_queue(
-                    &db,
-                    queue_name,
-                    queued_message.id.clone(),
-                    "Could not try consume (removing from queue)",
-                )
-                .await?;
-
-                //// 3: if not autoack then add it to processing ////
-                let auto_ack = options.is_some_and(|x| x.auto_ack.unwrap_or(false));
-                if !auto_ack {
-                    //// 4: add to processing queue ////
-                    utils::add_to_processing(
-                        &db,
-                        queue_name,
-                        queued_message.clone(),
-                        "Could not try consume (add to processing)",
-                    )
-                    .await?;
-                }
-                *_lock -= 1;
-                let _lock: Option<u8> = None;
-                //////// CRITICAL AREA ENDS (Some branch) //////
-
-                //// 4: return the actual payload ////
-                let msg = utils::get_message_from(
-                    &db,
-                    queue_name,
-                    queued_message,
-                    "Could not try consume (get actual message)",
-                )
-                .await;
-                match msg {
-                    Ok(msg) => Ok(Some(msg)),
-                    Err(e) => Err(e),
-                }
-            }
-            None => {
-                *_lock -= 1;
-                let _lock: Option<u8> = None;
-                //////// CRITICAL AREA ENDS (None branch) //////
-                Ok(None)
-            }
-        }
-         */
     }
 
     /// Consumes a message from the specified queue, blocking until a message is available.
@@ -286,6 +226,8 @@ impl Broker for SurrealDBBroker {
             return Ok(message);
         }
 
+        tokio::time::sleep(std::time::Duration::ZERO).await;
+
         // if there were no messages, we block using a live query and wait
         let db = self.check_connected()?;
         let queue_table = utils::queue_table(queue_name);
@@ -294,7 +236,7 @@ impl Broker for SurrealDBBroker {
             .select(queue_table)
             .range(
                 vec![Value::default(), Value::default()] // note default is 'None'
-                ..vec![Value::from_str("time::now()").unwrap_or_default(),Value::default()],
+                ..=vec![Value::from_str("time::now()").unwrap_or_default(),Value::default()],
             ) // should notify when future becomes present
             .live()
             .await
@@ -364,7 +306,7 @@ impl Broker for SurrealDBBroker {
             Err(e) => Err(e),
         };
         let _lock: Option<u8> = None;
-        //////// CRITICAL AREA ENDS (Some branch) //////
+        //////// CRITICAL AREA ENDS //////
         out
     }
 
