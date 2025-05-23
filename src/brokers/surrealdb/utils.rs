@@ -494,7 +494,7 @@ pub async fn remove_from_queue_add_to_processed_transaction(
     let processing_table = self::processing_table(queue_name);
     let message_id = queued_message.message_id; // reference to the original message
     let queued_message_id = queued_message.id; // what gets deleted
-    let uuid = message_id.key().clone();
+    let uuid = message_id.key().clone().to_string(); // the trait `Serialize` is not implemented for `RecordIdKey`
     let priority = queued_message.priority;
     let q = "
             BEGIN TRANSACTION;
