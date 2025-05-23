@@ -81,7 +81,14 @@ impl Broker for SurrealDBBroker {
     ///
     ///
     async fn connect(&mut self, broker_url: &str) -> Result<(), BroccoliError> {
-        let db = Self::client_from_url(broker_url).await?;
+        // if the configuration contains a database connection, we prioritise that
+        let db = match self.config.clone() {
+            Some(config) => match config.surrealdb_connection {
+                Some(db) => Some(db),
+                None => Self::client_from_url(broker_url).await?,
+            },
+            None => Self::client_from_url(broker_url).await?,
+        };
         self.db = db;
         self.connected = true;
         Ok(())
@@ -134,6 +141,9 @@ impl Broker for SurrealDBBroker {
                 utils::add_message(&db, queue_name, msg, "Could not publish (add msg)").await?;
             published.push(inserted);
 
+            //////// CRITICAL AREA START //////
+            let mut _lock = consume_mutex.lock().await;
+            *_lock += 1;
             // 2: add to queue //
             if delay.is_none() && scheduled_at.is_none() {
                 utils::add_to_queue(
@@ -143,7 +153,10 @@ impl Broker for SurrealDBBroker {
                     priority,
                     "Could not publish (enqueue)",
                 )
-                .await?;
+                .await
+                .inspect_err(|_| {
+                    *_lock -= 1;
+                })?;
             } else {
                 // we either have a delay or a schedule, schedule takes priority
                 if let Some(when) = scheduled_at {
@@ -155,7 +168,10 @@ impl Broker for SurrealDBBroker {
                         when,
                         "Could not publish scheduled (enqueue)",
                     )
-                    .await?;
+                    .await
+                    .inspect_err(|_| {
+                        *_lock -= 1;
+                    })?;
                 } else if let Some(when) = delay {
                     utils::add_to_queue_delayed(
                         &db,
@@ -165,9 +181,14 @@ impl Broker for SurrealDBBroker {
                         when,
                         "Could not publish delayed (enqueue)",
                     )
-                    .await?;
+                    .await
+                    .inspect_err(|_| {
+                        *_lock -= 1;
+                    })?;
                 }
             }
+            *_lock -= 1;
+            //////// CRITICAL AREA ENDS //////
         }
         Ok(published)
     }
