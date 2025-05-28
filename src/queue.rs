@@ -129,7 +129,7 @@ impl BroccoliQueueBuilder {
     #[cfg(feature = "surrealdb")]
     pub fn new_with_surrealdb(db: surrealdb::Surreal<surrealdb::engine::any::Any>) -> Self {
         Self {
-            broker_url: "<unused>".to_string(),
+            broker_url: "ws://unused".to_string(),
             retry_attempts: None,
             retry_failed: None,
             pool_connections: None,
