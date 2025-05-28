@@ -119,21 +119,17 @@ impl BroccoliQueueBuilder {
         }
     }
 
-    /// Creates a new `BroccoliQueueBuilder` with the specified broker instance, with the broker URL
+    /// Creates a new `BroccoliQueueBuilder` with the specified database connection
     ///
     /// # Arguments
     /// * `db` - Surrealdb database connection
-    /// * `broker_url` - unused, expected to be a URL that is representative of the original connection
     ///
     /// # Returns
     /// A new `BroccoliQueueBuilder` instance.
     #[cfg(feature = "surrealdb")]
-    pub fn new_with_surrealdb(
-        db: surrealdb::Surreal<surrealdb::engine::any::Any>,
-        broker_url: impl Into<String>,
-    ) -> Self {
+    pub fn new_with_surrealdb(db: surrealdb::Surreal<surrealdb::engine::any::Any>) -> Self {
         Self {
-            broker_url: broker_url.into(),
+            broker_url: "<unused>".to_string(),
             retry_attempts: None,
             retry_failed: None,
             pool_connections: None,
@@ -428,9 +424,8 @@ impl BroccoliQueue {
     /// A new `BroccoliQueueBuilder` instance.
     pub fn builder_with(
         db: surrealdb::Surreal<surrealdb::engine::any::Any>,
-        broker_url: impl Into<String>,
     ) -> BroccoliQueueBuilder {
-        BroccoliQueueBuilder::new_with_surrealdb(db, broker_url)
+        BroccoliQueueBuilder::new_with_surrealdb(db)
     }
 
     /// Publishes a message to the specified topic.
