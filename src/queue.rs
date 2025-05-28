@@ -765,7 +765,7 @@ impl BroccoliQueue {
     ///         Ok(())
     ///     }
     ///
-    ///     async fn on_success(message: BrokerMessage<JobPayload>) -> Result<(), BroccoliError> {
+    ///     async fn on_success(message: BrokerMessage<JobPayload>, result: ()) -> Result<(), BroccoliError> {
     ///         println!("Successfully processed message: {}", message.task_id);
     ///         Ok(())
     ///     }
