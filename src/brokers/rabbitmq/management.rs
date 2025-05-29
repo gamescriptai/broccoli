@@ -10,15 +10,15 @@ use super::RabbitMQBroker;
 impl QueueManagement for RabbitMQBroker {
     async fn get_queue_status(
         &self,
-        queue_name: String,
-        disambiguator: Option<String>,
+        _queue_name: String,
+        _disambiguator: Option<String>,
     ) -> Result<Vec<QueueStatus>, BroccoliError> {
         let pool = self.ensure_pool()?;
         let conn = pool
             .get()
             .await
             .map_err(|e| BroccoliError::Consume(format!("Failed to consume message: {e:?}")))?;
-        let channel = conn.create_channel().await.map_err(|e| {
+        let _channel = conn.create_channel().await.map_err(|e| {
             BroccoliError::Consume(format!("Failed to create channel: {e:?}"))
         })?;
         

@@ -10,5 +10,5 @@ pub mod rabbitmq;
 pub mod redis;
 
 #[cfg(feature = "management")]
-// Contains the management interface for brokers
+/// Contains the management interface for brokers
 pub mod management;

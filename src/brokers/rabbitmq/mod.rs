@@ -2,6 +2,6 @@ mod broker;
 mod utils;
 
 #[cfg(feature = "management")]
-pub mod management;
+mod management;
 
 pub use broker::RabbitMQBroker;
