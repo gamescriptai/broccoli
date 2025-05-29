@@ -627,7 +627,7 @@ impl BroccoliQueue {
     /// If the message fails to reject, a `BroccoliError` will be returned.
     pub async fn reject<T: Clone + serde::Serialize + serde::de::DeserializeOwned>(
         &self,
-        topic: &'static str,
+        topic: &str,
         message: BrokerMessage<T>,
     ) -> Result<(), BroccoliError> {
         self.broker
