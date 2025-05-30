@@ -702,7 +702,7 @@ impl BroccoliQueue {
     /// If the message fails to process, a `BroccoliError` will be returned.
     pub async fn process_messages<T, F, Fut>(
         &self,
-        topic: &'static str,
+        topic: &str,
         concurrency: Option<usize>,
         consume_options: Option<ConsumeOptions>,
         handler: F,
@@ -871,7 +871,7 @@ impl BroccoliQueue {
     /// If the message fails to process, a `BroccoliError` will be returned.
     pub async fn process_messages_with_handlers<T, F, MessageFut, SuccessFut, ErrorFut, S, E, R>(
         &self,
-        topic: &'static str,
+        topic: &str,
         concurrency: Option<usize>,
         consume_options: Option<ConsumeOptions>,
         message_handler: F,
