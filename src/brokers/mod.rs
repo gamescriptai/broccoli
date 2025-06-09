@@ -11,3 +11,7 @@ pub mod redis;
 /// Contains the `SurrealDB` broker implementation
 #[cfg(feature = "surrealdb")]
 pub mod surrealdb;
+
+#[cfg(feature = "management")]
+/// Contains the management interface for brokers
+pub mod management;

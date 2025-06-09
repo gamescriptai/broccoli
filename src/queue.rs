@@ -5,6 +5,9 @@ use time::Duration;
 
 use time::OffsetDateTime;
 
+#[cfg(feature = "management")]
+use crate::brokers::management::{BrokerWithManagement, QueueStatus};
+
 use crate::{
     brokers::{
         broker::{Broker, BrokerConfig, BrokerMessage, InternalBrokerMessage},
@@ -388,7 +391,11 @@ impl PublishOptionsBuilder {
 /// as well as processing messages with custom handlers.
 pub struct BroccoliQueue {
     /// The underlying message broker implementation
+    #[cfg(not(feature = "management"))]
     broker: Arc<Box<dyn Broker>>,
+
+    #[cfg(feature = "management")]
+    broker: Arc<Box<dyn BrokerWithManagement>>,
 }
 
 impl Clone for BroccoliQueue {
@@ -835,7 +842,7 @@ impl BroccoliQueue {
     ///         Ok(())
     ///     }
     ///
-    ///     async fn on_success(message: BrokerMessage<JobPayload>, _: ()) -> Result<(), BroccoliError> {
+    ///     async fn on_success(message: BrokerMessage<JobPayload>, _result: ()) -> Result<(), BroccoliError> {
     ///         println!("Successfully processed message: {}", message.task_id);
     ///         Ok(())
     ///     }
@@ -1000,5 +1007,27 @@ impl BroccoliQueue {
                 }
             }
         }
+    }
+
+    /// Retrieves the status of the specified queue.
+    ///
+    /// # Arguments
+    /// * `queue_name` - The name of the queue.
+    ///
+    /// # Returns
+    /// A `Result` containing the status of the queue, or a `BroccoliError` on failure.
+    ///
+    /// # Errors
+    /// If the queue status fails to be retrieved, a `BroccoliError` will be returned.
+    #[cfg(feature = "management")]
+    pub async fn queue_status(
+        &self,
+        queue_name: String,
+        disambiguator: Option<String>,
+    ) -> Result<QueueStatus, BroccoliError> {
+        self.broker
+            .get_queue_status(queue_name, disambiguator)
+            .await
+            .map_err(|e| BroccoliError::QueueStatus(format!("Failed to get queue status: {e:?}")))
     }
 }

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use broccoli_queue::error::BroccoliError;
 use broccoli_queue::queue::ConsumeOptions;
-use broccoli_queue::queue::PublishOptions;
+use broccoli_queue::queue::{ConsumeOptionsBuilder, PublishOptions};
 #[cfg(feature = "redis")]
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
@@ -479,11 +479,13 @@ async fn test_multiple_batch_publish_and_consume() {
     }
 }
 
+#[cfg(feature = "surrealdb")]
 lazy_static::lazy_static! {
     // warning: do not share these variables across tests in the same run
     static ref processed: Arc<tokio::sync::Mutex<usize>> = Arc::new(Mutex::new(0));
 }
 
+#[cfg(feature = "surrealdb")]
 async fn process_job(m: TestMessage) -> Result<(), BroccoliError> {
     // helper function to test process_messages
     let mut lock = processed.lock().await;
