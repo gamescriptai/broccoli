@@ -951,7 +951,8 @@ pub async fn add_to_failed(
     //   one that record id accepts (amazingly)
     let failed_table = self::failed_table(queue_name);
     let plain_uuid: surrealdb::Uuid = message_id.into();
-    let failed_record_id: RecordId = (failed_table, plain_uuid).into();
+    let uuid_key: RecordIdKey = plain_uuid.into();
+    let failed_record_id: RecordId = (failed_table, uuid_key).into();
     let failed_record = InternalSurrealDBBrokerFailedMessage {
         id: None, // it will be added by serde
         original_msg: InternalSurrealDBBrokerMessage::from(queue_name, msg)?,
