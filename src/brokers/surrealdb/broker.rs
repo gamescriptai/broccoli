@@ -22,10 +22,10 @@ pub struct SurrealDBBroker {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct InternalSurrealDBBrokerMessage {
-    /// Actual record id in surrealDB (`topicname,task_id`)
+    /// Actual record id in surrealDB (`topicname,<uuid>task_id`)
     pub id: RecordId,
     /// Unique identifier for the message (external version, without table name)
-    pub task_id: String,
+    pub task_id: surrealdb::sql::Uuid,
     /// The actual message content stringified
     pub payload: String,
     /// Number of processing attempts made
@@ -36,12 +36,12 @@ pub(crate) struct InternalSurrealDBBrokerMessage {
         Option<std::collections::HashMap<String, crate::brokers::broker::MetadataTypes>>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub(crate) struct InternalSurrealDBBrokerQueuedMessageRecord {
-    pub(crate) id: RecordId, // this is the queue record id [timestamp, message id]
-    pub(crate) message_id: RecordId, // this is the message id: `queue_name:task_id``
-    pub(crate) priority: i64, // message priority copy, to use for sorting in consumption
-}
+// #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+// pub(crate) struct InternalSurrealDBBrokerQueuedMessageRecord {
+//     pub(crate) id: RecordId, // this is the queue record id [timestamp, message id]
+//     pub(crate) message_id: RecordId, // this is the message id: `queue_name:task_id``
+//     pub(crate) priority: i64, // message priority copy, to use for sorting in consumption
+// }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct InternalSurrealDBBrokerMessageEntry {
@@ -52,6 +52,7 @@ pub(crate) struct InternalSurrealDBBrokerMessageEntry {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct InternalSurrealDBBrokerFailedMessage {
+    pub(crate) id: Option<surrealdb::sql::Uuid>, // original task id that failed
     pub(crate) original_msg: InternalSurrealDBBrokerMessage, // full original message
 }
 
@@ -160,6 +161,12 @@ impl Broker for SurrealDBBroker {
             } else {
                 // we either have a delay or a schedule, schedule takes priority
                 if let Some(when) = scheduled_at {
+                    // we lose subsecond precision but here we go
+                    let when = when.to_utc();
+                    let secs = when.unix_timestamp();
+                    let when: chrono::DateTime<chrono::Utc> =
+                        chrono::DateTime::from_timestamp(secs, 0).unwrap_or_default();
+                    let when: surrealdb::sql::Datetime = when.into();
                     utils::add_to_queue_scheduled(
                         &db,
                         queue_name,
@@ -188,6 +195,7 @@ impl Broker for SurrealDBBroker {
                 }
             }
             *_lock -= 1;
+            let _lock: Option<bool> = None;
             //////// CRITICAL AREA ENDS //////
         }
         Ok(published)
@@ -262,73 +270,85 @@ impl Broker for SurrealDBBroker {
             .live()
             .await
             .map_err(|err| BroccoliError::Broker(format!("Could not consume: {err:?}")))?;
-        let mut queued_message: Result<InternalSurrealDBBrokerQueuedMessageRecord, BroccoliError> =
+        let mut returned_message: Result<InternalBrokerMessage, BroccoliError> =
             Err(BroccoliError::NotImplemented);
         while let Some(notification) = futures::StreamExt::next(&mut stream).await {
             // we have a notification and exit the loop if it's a create
-            let payload: Option<Result<InternalSurrealDBBrokerQueuedMessageRecord, BroccoliError>> =
-                match notification {
-                    Ok(notification) => {
-                        let notification: Notification<InternalSurrealDBBrokerQueuedMessageRecord> =
-                            notification;
-                        let payload = notification.data;
-                        match notification.action {
-                            surrealdb::Action::Create => Some(Ok(payload)),
-                            _ => None,
+            let created_notification: Option<
+                Result<InternalSurrealDBBrokerMessageEntry, BroccoliError>,
+            > = match notification {
+                Ok(notification) => {
+                    let notification: Notification<InternalSurrealDBBrokerMessageEntry> =
+                        notification;
+                    let payload = notification.data;
+                    match notification.action {
+                        surrealdb::Action::Create => Some(Ok(payload)),
+                        _ => None,
+                    }
+                }
+                Err(error) => Some(Err(BroccoliError::Broker(format!(
+                    "Could not consume:'{queue_name}' {error}"
+                )))),
+            };
+            if let Some(message_notification) = created_notification {
+                // // // // CRITICAL AREA START //////
+                let mut _lock = consume_mutex.lock().await;
+                *_lock += 1;
+                let message = match message_notification {
+                    Ok(message) => {
+                        // if we have an error in the following operations, we decrement the lock counter
+                        if auto_ack {
+                            // TODO: add transaction management here (non-recoverable)
+                            let removed = utils::remove_from_queue(
+                                &db,
+                                queue_name,
+                                message.id.clone(),
+                                "Could not live consume (removing from queue)",
+                            )
+                            .await
+                            .inspect_err(|_| {
+                                *_lock -= 1;
+                            })?;
+                            Ok(Some(removed))
+                        } else {
+                            let removed = utils::remove_from_queue_add_to_processed_transaction(
+                                &db,
+                                queue_name,
+                                message,
+                                "Could not consume (removing from queue transaction)",
+                            )
+                            .await
+                            .inspect_err(|_| {
+                                *_lock -= 1;
+                            })?;
+                            *_lock -= 1;
+                            let _lock: Option<u8> = None;
+                            // // // // CRITICAL AREA ENDS // // // //
+                            Ok(removed)
                         }
                     }
-                    Err(error) => Some(Err(BroccoliError::Broker(format!(
-                        "Could not consume:'{queue_name}' {error}"
-                    )))),
+                    Err(e) => Err(e),
+                }?;
+                match message {
+                    Some(message) => {
+                        let payload = utils::get_message_from(
+                            &db,
+                            queue_name,
+                            message,
+                            "Could not consume (retrieving message) ",
+                        )
+                        .await?;
+                        returned_message = Ok(payload);
+                        break;
+                    }
+                    None => {
+                        log::trace!("Ignored live consume as another consumer took it");
+                    }
                 };
-            if let Some(message) = payload {
-                queued_message = message;
-                break;
             }
-        }
-        //////// CRITICAL AREA START //////
-        let mut _lock = consume_mutex.lock().await;
-        *_lock += 1;
-        let out = match queued_message {
-            Ok(message) => {
-                // if we have an error in the following operations, we decrement the lock counter
-                if auto_ack {
-                    utils::remove_from_queue(
-                        &db,
-                        queue_name,
-                        message.id.clone(),
-                        "Could not live consume (removing from queue)",
-                    )
-                    .await
-                    .inspect_err(|_| {
-                        *_lock -= 1;
-                    })?;
-                } else {
-                    utils::remove_from_queue_add_to_processed_transaction(
-                        &db,
-                        queue_name,
-                        message.clone(),
-                        "Could not live consume (removing from queue and adding to processed)",
-                    )
-                    .await
-                    .inspect_err(|_| {
-                        *_lock -= 1;
-                    })?;
-                }
-                *_lock -= 1;
-                Ok(utils::get_message_from(
-                    &db,
-                    queue_name,
-                    message,
-                    "Could not consume (retrieving message) ",
-                )
-                .await?)
-            }
-            Err(e) => Err(e),
-        };
-        let _lock: Option<u8> = None;
-        //////// CRITICAL AREA ENDS //////
-        out
+        } // while - next
+
+        returned_message
     }
 
     /// Acknowledges the processing of a message, removing it from the processing queue.
@@ -411,16 +431,23 @@ impl Broker for SurrealDBBroker {
                 "Could not reject (get original)",
             )
             .await?;
-            //// 2: add to failed if excceded all attempts ////
-            utils::add_to_failed(&db, queue_name, msg, "Could not reject (adding to failed)")
-                .await?;
-            //// 4: we nuke the old message ////
-            utils::remove_message(
+            // // 2: we nuke the old message // //
+            let removed = utils::remove_message(
                 &db,
                 queue_name,
                 rejected.message_id,
                 &message.task_id,
                 "Could not reject (removing message)",
+            )
+            .await?;
+
+            // // 4: add to failed if excceded all attempts // //
+            utils::add_to_failed(
+                &db,
+                queue_name,
+                removed.task_id,
+                msg,
+                "Could not reject (adding to failed)",
             )
             .await?;
             log::error!(
@@ -477,14 +504,15 @@ impl Broker for SurrealDBBroker {
         match queued {
             Some(queued) => {
                 //// 2: remove the actual message  ////
-                utils::remove_message(
+                let _ = utils::remove_message(
                     &db,
                     queue_name,
                     queued.message_id,
                     &task_id,
                     "Could not cancel (remove actual message)",
                 )
-                .await
+                .await?;
+                Ok(())
             }
             None => Err(BroccoliError::Broker(format!(
                 "Could not cancel (task_id not found):{queue_name}:{task_id}"

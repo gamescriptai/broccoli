@@ -13,12 +13,21 @@ pub enum BroccoliError {
     Broker(String),
 
     /// Errors that occur during broker implementations related to concurrent operations not being idempotent
-    /// (Only appear when doing multiple parallel `SurrealDB` reads)
+    /// (Can only happen when doing multiple parallel `SurrealDB` reads)
     ///
     /// # Examples
     /// - Multiple concurrent reads on the same topic
     #[error("Broker error: non-idempotent operation {0}")]
     BrokerNonIdempotentOp(String),
+
+    /// Errors that occur during broker implementations related to concurrent operations not being idempotent.
+    /// The operation can be retried.
+    /// (Can only happen when doing multiple `SurrealDB` operations on the same table )
+    ///
+    /// # Examples
+    /// - Multiple concurrent writes on the same table
+    #[error("Broker error: non-idempotent retriable operation {0}")]
+    BrokerNonIdempotentRetriableOp(String),
 
     /// Represents errors that occur during message publishing.
     ///

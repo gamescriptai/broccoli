@@ -744,8 +744,11 @@ impl BroccoliQueue {
                             let message = broker
                                 .consume(&topic, consume_options.clone())
                                 .await
-                                .map_err(|e| {
-                                    log::error!("Failed to consume message: {:?}", e);
+                                .map_err(|e| match e {
+                                    BroccoliError::BrokerNonIdempotentOp(e) => {
+                                        log::error!("Failed to consume message due to concurrency issues: {:?}", e)
+                                    }
+                                    _ => log::error!("Failed to consume message: {:?}", e),
                                 });
 
                             if let Ok(message) = message {
