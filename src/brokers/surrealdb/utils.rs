@@ -950,17 +950,30 @@ pub async fn add_to_failed(
     // - plan uuid (non-surrealdb, reexported by surrealdb as surrealdb::uuid) as that is the only
     //   one that record id accepts (amazingly)
     let failed_table = self::failed_table(queue_name);
-    let plain_uuid: surrealdb::Uuid = message_id.into();
-    let uuid_key: RecordIdKey = plain_uuid.into();
-    let failed_record_id: RecordId = (failed_table, uuid_key).into();
+    // none of these conversions work
+    // let uuid_value: Value = message_id.into();
+    // let uuid_value: Value = plain_uuid.into();
+    // let uuid_key: RecordIdKey = uuid_value.into();
+    // let thing: surrealdb::sql::Thing = message_id.into();
+    // let thing: surrealdb::sql::Thing = plain_uuid.into();
+    // let id: surrealdb::sql::Id = (failed_table, message_id).into();
+    //let uuid_value: Value = id.into();
+    //let uuid_key: RecordIdKey = id.into();
+    //let failed_record_id: RecordId = (failed_table, id).into();
+    // these work but depend on the exact environment/version and are flakey
+    // let uuid_value: surrealdb::sql::Value = message_id.into();
+    // let _plain_uuid: surrealdb::Uuid = message_id.into();
+    // let id: surrealdb::sql::Id = message_id.into();
+
     let failed_record = InternalSurrealDBBrokerFailedMessage {
         id: None, // it will be added by serde
         original_msg: InternalSurrealDBBrokerMessage::from(queue_name, msg)?,
     };
-    let q = "CREATE $failed_record_id CONTENT $failed_record";
+    let q = "CREATE type::thing($failed_table, $message_id) CONTENT $failed_record";
     let _ = db
         .query(q)
-        .bind(("failed_record_id", failed_record_id))
+        .bind(("failed_table", failed_table))
+        .bind(("message_id", format!("u'{}'",message_id.0)))
         .bind(("failed_record", failed_record))
         .await
         .map_err(|e| BroccoliError::Broker(format!("{err_msg}:'{queue_name}' {e}")))?;
