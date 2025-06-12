@@ -183,18 +183,26 @@ async fn benchmark_raw_surrealdb_throughput(db: &Surreal<Any>, message_count: us
         // read from queue, add processing and return
         let q = "
             BEGIN TRANSACTION;
-            LET $m = SELECT * FROM ONLY (SELECT * FROM type::thing($queue_table,type::range([[None,None],[time::now(),None]]))) ORDER BY priority,id[0] ASC LIMIT 1;
-            CREATE type::table($processing_table) CONTENT {
-                id: type::thing($processing_table, $m.id[1]),
-                message_id: $m.message_id,
-                priority: $m.priority
+            {
+                LET $m = SELECT * FROM ONLY (SELECT * FROM type::thing($queue_table,type::range([[None,None],[time::now(),None]]))) ORDER BY priority,id[0] ASC LIMIT 1;
+                IF !$m {
+                    RETURN NONE // no data available
+                };
+                CREATE type::table($processing_table) CONTENT {
+                    id: type::thing($processing_table, $m.id[1]),
+                    message_id: $m.message_id,
+                    priority: $m.priority
+                };
+                -- remove from queue and return payload
+                --  remember we don't delete from index, instead acknowledge/reject/cancel will do it
+                LET $deleted = DELETE $m.id RETURN BEFORE;
+                IF !$deleted {
+                    THROW 'Transaction failed as $m.id already deleted (CONCURRENT_READ)';
+                };
+                LET $payload = SELECT * FROM  $m.message_id;
+                $payload
             };
-            -- remove from queue and return payload
-            -- remember we don't delete from index, instead acknowledge/reject/cancel will do it
-            DELETE $m.id;
-            LET $payload = SELECT * FROM  $m.message_id;
             COMMIT TRANSACTION;
-            $payload;
     ";
         let queued: Response = db
             .query(q)
@@ -208,7 +216,10 @@ async fn benchmark_raw_surrealdb_throughput(db: &Surreal<Any>, message_count: us
             Ok(mut queued) => queued.take(queued.num_statements() - 1).unwrap(),
             Err(e) => panic!("Could not do the raw transaction {:?}", e),
         };
-        let queued = queued.unwrap();
+        let queued = match queued {
+            Some(queued) => queued,
+            None => continue,
+        };
 
         // remove processing table
         // [date,id] --> id
@@ -436,22 +447,22 @@ fn criterion_benchmark(c: &mut Criterion) {
     let message_counts = [1, 10, 100];
     for (db, broccoli_queue, instance) in instances {
         for &count in &message_counts {
-            if instance == "disk" {
-                //TODO: mem raw test runs into transaction issues so skipping it
-                group.bench_function(
-                    format!(
-                        "Raw surrealdb publish loop + consume loop {} - {}",
-                        instance, count
-                    ),
-                    |b| {
-                        b.iter(|| {
-                            rt.block_on(async {
-                                benchmark_raw_surrealdb_throughput(&db, count).await
-                            })
-                        })
-                    },
-                );
-            }
+            //TODO: mem raw test runs into transaction issues so skipping it
+            // if instance == "mem" {
+            //     group.bench_function(
+            //         format!(
+            //             "Raw surrealdb publish loop + consume loop {} - {}",
+            //             instance, count
+            //         ),
+            //         |b| {
+            //             b.iter(|| {
+            //                 rt.block_on(async {
+            //                     benchmark_raw_surrealdb_throughput(&db, count).await
+            //                 })
+            //             })
+            //         },
+            //     );
+            // }
 
             for options in &consume_options {
                 let opt_str = if options.is_some() {
