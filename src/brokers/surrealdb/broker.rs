@@ -36,13 +36,6 @@ pub(crate) struct InternalSurrealDBBrokerMessage {
         Option<std::collections::HashMap<String, crate::brokers::broker::MetadataTypes>>,
 }
 
-// #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-// pub(crate) struct InternalSurrealDBBrokerQueuedMessageRecord {
-//     pub(crate) id: RecordId, // this is the queue record id [timestamp, message id]
-//     pub(crate) message_id: RecordId, // this is the message id: `queue_name:task_id``
-//     pub(crate) priority: i64, // message priority copy, to use for sorting in consumption
-// }
-
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct InternalSurrealDBBrokerMessageEntry {
     pub(crate) id: RecordId,
@@ -54,13 +47,6 @@ pub(crate) struct InternalSurrealDBBrokerMessageEntry {
 pub(crate) struct InternalSurrealDBBrokerFailedMessage {
     pub(crate) id: Option<surrealdb::sql::Uuid>, // original task id that failed
     pub(crate) original_msg: InternalSurrealDBBrokerMessage, // full original message
-}
-
-// consumer lock
-lazy_static! {
-    // TODO: to improve performance we could have a hash table of mutexes, or sharding
-    static ref consume_mutex: std::sync::Arc<tokio::sync::Mutex<u8>> =
-        std::sync::Arc::new(tokio::sync::Mutex::new(0));
 }
 
 /// Implementation of the `Broker` trait for `SurrealDBBroker`.
@@ -141,11 +127,6 @@ impl Broker for SurrealDBBroker {
             let inserted =
                 utils::add_message(&db, queue_name, msg, "Could not publish (add msg)").await?;
             published.push(inserted);
-
-            //////// CRITICAL AREA START //////
-            let mut _lock = consume_mutex.lock().await;
-            *_lock += 1;
-            // 2: add to queue //
             if delay.is_none() && scheduled_at.is_none() {
                 utils::add_to_queue(
                     &db,
@@ -154,10 +135,7 @@ impl Broker for SurrealDBBroker {
                     priority,
                     "Could not publish (enqueue)",
                 )
-                .await
-                .inspect_err(|_| {
-                    *_lock -= 1;
-                })?;
+                .await?;
             } else {
                 // we either have a delay or a schedule, schedule takes priority
                 if let Some(when) = scheduled_at {
@@ -175,10 +153,7 @@ impl Broker for SurrealDBBroker {
                         when,
                         "Could not publish scheduled (enqueue)",
                     )
-                    .await
-                    .inspect_err(|_| {
-                        *_lock -= 1;
-                    })?;
+                    .await?;
                 } else if let Some(when) = delay {
                     utils::add_to_queue_delayed(
                         &db,
@@ -188,15 +163,9 @@ impl Broker for SurrealDBBroker {
                         when,
                         "Could not publish delayed (enqueue)",
                     )
-                    .await
-                    .inspect_err(|_| {
-                        *_lock -= 1;
-                    })?;
+                    .await?;
                 }
             }
-            *_lock -= 1;
-            let _lock: Option<bool> = None;
-            //////// CRITICAL AREA ENDS //////
         }
         Ok(published)
     }
@@ -216,12 +185,6 @@ impl Broker for SurrealDBBroker {
         options: Option<ConsumeOptions>,
     ) -> Result<Option<InternalBrokerMessage>, BroccoliError> {
         let db = self.check_connected()?;
-        //////// CRITICAL AREA START //////
-        let mut _lock = consume_mutex.lock().await;
-        *_lock += 1;
-        if *_lock != 1 {
-            log::warn!("Incorrect lock value consuming {}: {}", queue_name, &_lock);
-        }
         let auto_ack = options.is_some_and(|x| x.auto_ack.unwrap_or(false));
         let payload = utils::get_queued_transaction(
             &db,
@@ -230,10 +193,6 @@ impl Broker for SurrealDBBroker {
             "Could not try consume (transaction)",
         )
         .await;
-        *_lock -= 1;
-        let _lock: Option<u8> = None;
-        //////// CRITICAL AREA ENDS //////
-
         payload
     }
 
@@ -291,9 +250,6 @@ impl Broker for SurrealDBBroker {
                 )))),
             };
             if let Some(message_notification) = created_notification {
-                // // // // CRITICAL AREA START //////
-                let mut _lock = consume_mutex.lock().await;
-                *_lock += 1;
                 let message = match message_notification {
                     Ok(message) => {
                         // if we have an error in the following operations, we decrement the lock counter
@@ -305,10 +261,7 @@ impl Broker for SurrealDBBroker {
                                 message.id.clone(),
                                 "Could not live consume (removing from queue)",
                             )
-                            .await
-                            .inspect_err(|_| {
-                                *_lock -= 1;
-                            })?;
+                            .await?;
                             Ok(Some(removed))
                         } else {
                             let removed = utils::remove_from_queue_add_to_processed_transaction(
@@ -317,12 +270,9 @@ impl Broker for SurrealDBBroker {
                                 message,
                                 "Could not consume (removing from queue transaction)",
                             )
-                            .await
-                            .inspect_err(|_| {
-                                *_lock -= 1;
-                            })?;
-                            *_lock -= 1;
-                            let _lock: Option<u8> = None;
+                            .await?;
+                            // *_lock -= 1;
+                            // let _lock: Option<u8> = None;
                             // // // // CRITICAL AREA ENDS // // // //
                             Ok(removed)
                         }
