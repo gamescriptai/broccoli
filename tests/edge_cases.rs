@@ -445,7 +445,7 @@ async fn test_multiple_batch_publish_and_consume() {
         },
     ];
 
-    for i in 0..10 {
+    for i in 0..50 {
         let published: Vec<TestMessage> = queue
             .publish_batch(test_topic, None, messages.clone(), None)
             .await
@@ -494,8 +494,9 @@ async fn process_job(m: TestMessage) -> Result<(), BroccoliError> {
     Ok(())
 }
 
-#[tokio::test]
+//#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[cfg(feature = "surrealdb")]
+#[tokio::test]
 async fn test_multiple_batch_publish_and_handler() {
     // similar situation with handlers
 
@@ -514,8 +515,8 @@ async fn test_multiple_batch_publish_and_handler() {
         },
     ];
 
-    for _ in 0..10 {
-        // launch consumer first
+    for _ in 0..50 {
+        // reset counter and launch consumer first
 
         // CRITICAL AREA START //
         {
@@ -524,24 +525,18 @@ async fn test_multiple_batch_publish_and_handler() {
             let _lock: Option<()> = None;
         }
         // CRITICAL AREA END //
-
         let queue_clone = queue.clone();
         let consumer = tokio::spawn(async move {
             let _ = queue_clone
-                .process_messages(
-                    test_topic,
-                    None,
-                    Some(
-                        ConsumeOptions::builder()
-                            .consume_wait(std::time::Duration::from_millis(1))
-                            .build(),
-                    ),
-                    |msg| async { process_job(msg.payload).await },
-                )
+                .process_messages(test_topic, None, None, |msg| async {
+                    process_job(msg.payload).await
+                })
                 .await;
             panic!("Spawn should have been killed while processing");
         });
-
+        // let's give time to the consumer to get execution time
+        // tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        log::info!("publishing...");
         let published: Vec<TestMessage> = queue
             .publish_batch(test_topic, None, messages.clone(), None)
             .await
@@ -550,6 +545,7 @@ async fn test_multiple_batch_publish_and_handler() {
             .map(|m| m.payload)
             .collect();
         assert_eq!(2, published.len());
+        log::info!("published");
 
         let expected_count = 3; // 1+2
         let wait = tokio::spawn(async move {
@@ -561,6 +557,7 @@ async fn test_multiple_batch_publish_and_handler() {
                 counter = *_lock;
                 let _lock: Option<()> = None;
                 // CRITICAL AREA END //
+                log::info!("wait loop, counter={}", &counter);
             }
             consumer.abort();
         });

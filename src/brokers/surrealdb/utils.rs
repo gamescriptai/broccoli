@@ -2,12 +2,8 @@ use std::str::FromStr;
 use surrealdb::engine::any::connect;
 use surrealdb::engine::any::Any;
 use surrealdb::RecordId;
-use surrealdb::RecordIdKey;
-use surrealdb::Response;
 use surrealdb::Surreal;
-use surrealdb::Value;
 use time::Duration;
-use time::OffsetDateTime;
 use url::Url;
 
 use crate::brokers::broker::BrokerConfig;
@@ -17,7 +13,6 @@ use crate::error::BroccoliError;
 use super::broker::InternalSurrealDBBrokerFailedMessage;
 use super::broker::InternalSurrealDBBrokerMessage;
 use super::broker::InternalSurrealDBBrokerMessageEntry;
-// use super::broker::InternalSurrealDBBrokerQueuedMessageRecord;
 use super::SurrealDBBroker;
 
 #[derive(Default)]
@@ -30,7 +25,7 @@ struct SurrealDBConnectionConfig {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct InternalSurrealDBBrokerQueueIndex {
-    pub queue_id: RecordId, // points to queue:[timestamp,messageid]
+    pub queue_id: RecordId, // points to queue:[priority,timestamp,messageid]
 }
 
 impl Default for SurrealDBBroker {
@@ -198,7 +193,7 @@ impl InternalSurrealDBBrokerMessage {
     }
 }
 
-/// this table holds a timesorted timeseries, <`queue_name>`:[<timestamp>,<taskid>]
+/// this table holds a timesorted timeseries, <`queue_name>`:[<priority>,<timestamp>,<taskid>]
 /// and acts as the queue
 pub fn queue_table(queue_name: &str) -> String {
     format!("{queue_name}___queue")
@@ -222,7 +217,6 @@ fn index_table(queue_name: &str) -> String {
 
 // queue_name + task id : namely `queue_name:<uuid>task_id`
 fn message_record_id(queue_name: &str, task_id: &str) -> Result<RecordId, BroccoliError> {
-    // let task_id_uuid: Result<surrealdb::sql::Uuid, _> = task_id.into();
     match surrealdb::sql::Uuid::from_str(task_id) {
         Ok(uuid) => {
             let uuid: surrealdb::sql::Id = uuid.into();
@@ -237,16 +231,18 @@ fn message_record_id(queue_name: &str, task_id: &str) -> Result<RecordId, Brocco
     }
 }
 
-/// time+id range record id, namely `queue_table:[when,<uuid>task_id]`
+/// time+id range record id, namely `queue_table:[priority, when,<uuid>task_id]`
 fn queue_record_id(
     queue_name: &str,
+    priority: i64,
     when: surrealdb::sql::Datetime,
     task_id: surrealdb::Uuid,
 ) -> RecordId {
     let queue_table = self::queue_table(queue_name);
+    let priority: surrealdb::sql::Value = priority.into();
     let task_id_uuid_sql_val: surrealdb::sql::Value = task_id.into();
     let datetime: surrealdb::sql::Value = when.into();
-    let vec_id: surrealdb::sql::Id = vec![datetime, task_id_uuid_sql_val].into();
+    let vec_id: surrealdb::sql::Id = vec![priority, datetime, task_id_uuid_sql_val].into();
     let queue_thing = surrealdb::sql::Thing::from((queue_table, vec_id));
     let queue_record_id: RecordId = RecordId::from_inner(queue_thing);
     queue_record_id
@@ -264,14 +260,6 @@ fn index_record_id(task_id: &str, queue_name: &str) -> Result<RecordId, Broccoli
     let index_thing = surrealdb::sql::Thing::from((index_table, vec_id));
     let index_record_id: RecordId = RecordId::from_inner(index_thing);
     Ok(index_record_id)
-    // let index_record_str = format!("{index_table}:[<uuid>'{task_id}','{queue_name}']");
-    // let index_record_id = RecordId::from_str(&index_record_str);
-    // match index_record_id {
-    //     Ok(record_id) => Ok(record_id),
-    //     Err(e) => Err(BroccoliError::Broker(format!(
-    //         "Incorrect task id for index ({e})"
-    //     ))),
-    // }
 }
 
 /// add to the timeseries
@@ -334,7 +322,7 @@ async fn add_record_to_queue(
         Ok(uuid) => Ok(uuid),
         Err(_) => Err(BroccoliError::Broker(format!("{} is not a uuid", &task_id))),
     }?;
-    let queue_record_id = queue_record_id(queue_name, when, *uuid);
+    let queue_record_id = queue_record_id(queue_name, priority, when, *uuid);
     let message_record_id = message_record_id(queue_name, task_id)?;
     let msg = InternalSurrealDBBrokerMessageEntry {
         id: queue_record_id.clone(),
@@ -532,13 +520,21 @@ pub async fn get_queued_transaction_impl(
     let q = "
             BEGIN TRANSACTION;
             {
-                LET $m = SELECT * FROM ONLY (SELECT * FROM type::thing($queue_table,type::range([[None,None],[time::now(),None]]))) ORDER BY priority,id[0] ASC LIMIT 1;
+                LET $m = {
+                    FOR $p IN 1..=5 {
+                        LET $output = SELECT * FROM ONLY type::thing($queue_table,type::range([[$p,None],[$p,time::now()]])) LIMIT 1;
+                        IF $output {
+                            RETURN $output;
+                        };
+                    };
+                };
+
                 IF type::is::none($m) { -- nothing on the queue
                     RETURN NONE
                 };
                 IF !$auto_ack {
                     CREATE type::table($processing_table) CONTENT {
-                        id: type::thing($processing_table, $m.id[1]),
+                        id: type::thing($processing_table, $m.id[2]), // id[2] is the uuid
                         message_id: $m.message_id,
                         priority: $m.priority
                     };
@@ -596,11 +592,11 @@ pub async fn get_queued_transaction_impl(
 }
 
 /// remove from ordered queue
-/// `queued_message_id` must be: queue:[timestamp, `task_id`]
+/// `queued_message_id` must be: queue:[priority, timestamp, `task_id`]
 pub async fn remove_from_queue(
     db: &Surreal<Any>,
     queue_name: &str,
-    queued_message_id: RecordId, // queue:[timestamp, task_id]
+    queued_message_id: RecordId, // queue:[priority, timestamp, task_id]
     err_msg: &'static str,
 ) -> Result<InternalSurrealDBBrokerMessageEntry, BroccoliError> {
     let deleted: Option<InternalSurrealDBBrokerMessageEntry> =

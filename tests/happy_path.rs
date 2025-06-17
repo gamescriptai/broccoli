@@ -20,11 +20,12 @@ struct TestMessage {
 
 #[tokio::test]
 async fn test_publish_and_consume() {
+    //env_logger::init();
     let queue = common::setup_queue().await;
 
     #[cfg(feature = "redis")]
     let mut redis = common::get_redis_client().await;
-    let test_topic = "test_publish_topic";
+    let test_topic = "test_publish_and_consume";
 
     // Test message
     let message = TestMessage {
@@ -533,6 +534,7 @@ async fn test_message_cancellation() {
         .publish(test_topic, Some(String::from("job-1")), &message, None)
         .await
         .expect("Failed to publish message");
+
     // Cancel the message
     let result = queue
         .cancel(test_topic, published.task_id.to_string())
@@ -758,9 +760,16 @@ async fn test_process_messages() {
     // launch consumer first
     let consumer = tokio::spawn(async move {
         let _ = consumer_queue
-            .process_messages("test_process_messages_topic", Some(5), None, |msg| async {
-                process_job(msg.payload).await
-            })
+            .process_messages(
+                "test_process_messages_topic",
+                Some(5),
+                Some(
+                    ConsumeOptionsBuilder::new()
+                        .consume_wait(std::time::Duration::from_millis(1))
+                        .build(),
+                ),
+                |msg| async { process_job(msg.payload).await },
+            )
             .await;
         panic!("Spawn should have been killed while processing");
     });

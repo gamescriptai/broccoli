@@ -37,9 +37,9 @@ pub(crate) struct InternalSurrealDBBrokerMessage {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct InternalSurrealDBBrokerMessageEntry {
-    pub(crate) id: RecordId,
+    pub(crate) id: RecordId, //queuetable:[priority, timestamp, <uuid>task_id]
     pub(crate) message_id: RecordId, // this is the message id: `queue_name:task_id``
-    pub(crate) priority: i64,        // message priority copy, to use for sorting in consumption
+    pub(crate) priority: i64, // message priority copy, to use for sorting in consumption
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -222,8 +222,8 @@ impl Broker for SurrealDBBroker {
         let mut stream = db
             .select(queue_table)
             .range(
-                vec![Value::default(), Value::default()] // note default is 'None'
-                ..=vec![Value::from_str("time::now()").unwrap_or_default(),Value::default()],
+                vec![Value::from_str("1").unwrap_or_default(), Value::default()] // note default is 'None'
+                ..=vec![Value::from_str("5").unwrap_or_default(), Value::from_str("time::now()").unwrap_or_default()],
             ) // should notify when future becomes present
             .live()
             .await

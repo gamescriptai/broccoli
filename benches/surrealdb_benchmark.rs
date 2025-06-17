@@ -155,7 +155,7 @@ async fn benchmark_raw_surrealdb_throughput(db: &Surreal<Any>, message_count: us
         // insert queue entry
         let id = msg.id.key().clone();
         let now = to_rfc3339(time::OffsetDateTime::now_utc()).unwrap();
-        let queue_record_str = format!("{queue_name}___queue:[<datetime>'{now}',{id}]");
+        let queue_record_str = format!("{queue_table}:[5,<datetime>'{now}',{id}]");
         let queue_record_id = RecordId::from_str(&queue_record_str).unwrap();
         let message_record_id: RecordId = msg.id.clone();
 
@@ -184,12 +184,19 @@ async fn benchmark_raw_surrealdb_throughput(db: &Surreal<Any>, message_count: us
         let q = "
             BEGIN TRANSACTION;
             {
-                LET $m = SELECT * FROM ONLY (SELECT * FROM type::thing($queue_table,type::range([[None,None],[time::now(),None]]))) ORDER BY priority,id[0] ASC LIMIT 1;
+                LET $m = {
+                    FOR $p IN 1..=5 {
+                        LET $output = SELECT * FROM ONLY type::thing($queue_table,type::range([[$p,None],[$p,time::now()]])) LIMIT 1;
+                        IF $output {
+                            RETURN $output;
+                        };
+                    };
+                };
                 IF !$m {
                     RETURN NONE // no data available
                 };
                 CREATE type::table($processing_table) CONTENT {
-                    id: type::thing($processing_table, $m.id[1]),
+                    id: type::thing($processing_table, $m.id[2]),
                     message_id: $m.message_id,
                     priority: $m.priority
                 };
@@ -449,19 +456,17 @@ fn criterion_benchmark(c: &mut Criterion) {
         for &count in &message_counts {
             //TODO: mem raw test runs into transaction issues so skipping it
             // if instance == "mem" {
-            //     group.bench_function(
-            //         format!(
-            //             "Raw surrealdb publish loop + consume loop {} - {}",
-            //             instance, count
-            //         ),
-            //         |b| {
-            //             b.iter(|| {
-            //                 rt.block_on(async {
-            //                     benchmark_raw_surrealdb_throughput(&db, count).await
-            //                 })
-            //             })
-            //         },
-            //     );
+            // group.bench_function(
+            //     format!(
+            //         "Raw surrealdb publish loop + consume loop {} - {}",
+            //         instance, count
+            //     ),
+            //     |b| {
+            //         b.iter(|| {
+            //             rt.block_on(async { benchmark_raw_surrealdb_throughput(&db, count).await })
+            //         })
+            //     },
+            // );
             // }
 
             for options in &consume_options {
