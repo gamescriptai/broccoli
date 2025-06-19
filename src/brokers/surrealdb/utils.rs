@@ -524,6 +524,7 @@ pub async fn get_queued_transaction_impl(
             BEGIN TRANSACTION;
             {
                 -- first of all, we  extract messages up to the batch size limit, in priority order
+                -- this implementation is only for surrealdb 2.1.0+
                 LET $msgs = [1,2,3,4,5].fold({out_: [], remaining_: $batch_size, t_: $queue_table}, |$acc, $p| { 
                     IF $acc.remaining_>0 {
                         LET $output = SELECT * FROM type::thing($acc.t_,type::range([[$p,None],[$p,time::now()]])) LIMIT $acc.remaining_;
@@ -537,25 +538,24 @@ pub async fn get_queued_transaction_impl(
                             RETURN $acc;
                     }
                 }).out_;
-
                 IF !type::is::array($msgs) OR array::is_empty($msgs) { -- nothing on the queue
-                    RETURN NONE
+                    RETURN []
                 };
                 -- next we iterate over the messages, create the in process if needed, delete and get payload
                 LET $payloads = array::fold($msgs, {out_: [], t_: $processing_table}, |$acc, $e|  {
-                    IF !$auto_ack {
-                        CREATE type::table($acc.t_) CONTENT {
-                            id: type::thing($acc.t_, $e.id[2]), // id[2] is the uuid
-                            message_id: $e.message_id,
-                            priority: $e.priority
-                        };
-                    };
                     -- remove from queue and return payload
                     -- remember we don't delete from index, instead acknowledge/reject/cancel will do it
                     LET $deleted = DELETE $e.id RETURN BEFORE;
                     IF !$deleted {
                         -- if it was not deleted we will not abort the transaction, we just won't return the payload
                         RETURN $acc;
+                    };
+                    IF !$auto_ack {
+                        CREATE type::table($acc.t_) CONTENT {
+                            id: type::thing($acc.t_, $e.id[2]), // id[2] is the uuid
+                            message_id: $e.message_id,
+                            priority: $e.priority
+                        };
                     };
                     LET $payload = SELECT * FROM ONLY $e.message_id;
                     {out_: array::append($acc.out_, $payload), t_: $acc.t_};
