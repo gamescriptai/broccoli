@@ -189,6 +189,38 @@ impl Broker for SurrealDBBroker {
             &db,
             queue_name,
             auto_ack,
+            1,
+            "Could not try consume (transaction)",
+        )
+        .await;
+        match payload {
+            Ok(messages) => Ok(messages.first().map(|m| m.to_owned())),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Attempts to consume up to a number of messages from the specified queue.
+    /// Does not block if not enough messages are available, and returns immmediately.
+    ///
+    /// # Arguments
+    /// * `queue_name` - The name of the queue.
+    ///
+    /// # Returns
+    /// A `Result` containing an `Some(String)` with the message if available or `None`
+    /// if no message is avaiable, and a `BroccoliError` on failure.
+    async fn try_consume_batch(
+        &self,
+        queue_name: &str,
+        batch_size: usize,
+        options: Option<ConsumeOptions>,
+    ) -> Result<Vec<InternalBrokerMessage>, BroccoliError> {
+        let db = self.check_connected()?;
+        let auto_ack = options.is_some_and(|x| x.auto_ack.unwrap_or(false));
+        let payload = utils::get_queued_transaction(
+            &db,
+            queue_name,
+            auto_ack,
+            batch_size,
             "Could not try consume (transaction)",
         )
         .await;

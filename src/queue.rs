@@ -595,6 +595,34 @@ impl BroccoliQueue {
         }
     }
 
+    /// Attempts to consume up to a number of messages from the specified queue.
+    /// Does not block if not enough messages are available, and returns immmediately.
+    ///
+    /// # Arguments
+    /// * `queue_name` - The name of the queue.
+    ///
+    /// # Returns
+    /// A `Result` containing an `Some(String)` with the message if available or `None`
+    /// if no message is avaiable, and a `BroccoliError` on failure.
+    pub async fn try_consume_batch<T: Clone + serde::Serialize + serde::de::DeserializeOwned>(
+        &self,
+        topic: &str,
+        batch_size: usize,
+        options: Option<ConsumeOptions>,
+    ) -> Result<Vec<BrokerMessage<T>>, BroccoliError> {
+        let serialized_messages = self
+            .broker
+            .try_consume_batch(topic, batch_size, options)
+            .await
+            .map_err(|e| BroccoliError::Consume(format!("Failed to consume message(s): {e:?}")))?;
+
+        let mut messages: Vec<BrokerMessage<T>> = Vec::with_capacity(serialized_messages.len());
+        for message in serialized_messages {
+            messages.push(message.into_message()?);
+        }
+        Ok(messages)
+    }
+
     /// Acknowledges the processing of a message, removing it from the processing queue.
     ///
     /// # Arguments

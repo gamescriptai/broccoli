@@ -156,6 +156,75 @@ async fn test_batch_publish_and_consume() {
 }
 
 #[tokio::test]
+async fn test_try_consume_batch() {
+    let queue = common::setup_queue().await;
+
+    #[cfg(feature = "redis")]
+    let mut redis = common::get_redis_client().await;
+    let test_topic = "test_try_batch_topic";
+
+    // Test messages
+    let messages = vec![
+        TestMessage {
+            id: "1".to_string(),
+            content: "content 1".to_string(),
+        },
+        TestMessage {
+            id: "2".to_string(),
+            content: "content 2".to_string(),
+        },
+    ];
+
+    // Publish batch
+    #[cfg(not(feature = "test-fairness"))]
+    let published = queue
+        .publish_batch(test_topic, None, messages.clone(), None)
+        .await
+        .expect("Failed to publish batch");
+    #[cfg(feature = "test-fairness")]
+    let published = queue
+        .publish_batch(
+            test_topic,
+            Some(String::from("job-1")),
+            messages.clone(),
+            None,
+        )
+        .await
+        .expect("Failed to publish batch");
+
+    #[cfg(not(feature = "test-fairness"))]
+    let consume_options = ConsumeOptions::default();
+    #[cfg(feature = "test-fairness")]
+    let consume_options = ConsumeOptionsBuilder::new().fairness(true).build();
+
+    // Consume messages
+    let consumed = queue
+        .try_consume_batch::<TestMessage>(test_topic, 2, Some(consume_options))
+        .await
+        .expect("Failed to consume batch");
+
+    assert_eq!(2, consumed.len());
+    assert_eq!(published.len(), consumed.len());
+    assert_eq!(published[0].payload, consumed[0].payload);
+    assert_eq!(published[1].payload, consumed[1].payload);
+
+    #[cfg(feature = "redis")]
+    {
+        #[cfg(not(feature = "test-fairness"))]
+        let queue_name = test_topic;
+        #[cfg(feature = "test-fairness")]
+        let queue_name = format!("{}_job-1_queue", test_topic);
+
+        // Verify queue size after consuming
+        let remaining: usize = redis.zcard(queue_name).await.unwrap();
+        assert_eq!(
+            remaining, 0,
+            "Queue should be empty after consuming all messages"
+        );
+    }
+}
+
+#[tokio::test]
 async fn test_delayed_message() {
     let queue = common::setup_queue().await;
 

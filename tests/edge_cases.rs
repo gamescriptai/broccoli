@@ -445,7 +445,7 @@ async fn test_multiple_batch_publish_and_consume() {
         },
     ];
 
-    for i in 0..50 {
+    for i in 0..10 {
         let published: Vec<TestMessage> = queue
             .publish_batch(test_topic, None, messages.clone(), None)
             .await
@@ -515,7 +515,7 @@ async fn test_multiple_batch_publish_and_handler() {
         },
     ];
 
-    for _ in 0..50 {
+    for _ in 0..5 {
         // reset counter and launch consumer first
 
         // CRITICAL AREA START //

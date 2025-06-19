@@ -465,11 +465,12 @@ pub async fn get_queued_transaction(
     db: &Surreal<Any>,
     queue_name: &str,
     auto_ack: bool,
+    batch_size: usize,
     err_msg: &'static str,
-) -> Result<Option<InternalBrokerMessage>, BroccoliError> {
+) -> Result<Vec<InternalBrokerMessage>, BroccoliError> {
         let mut retries: u64 = 0;
     let mut status: Option<
-        Result<Option<InternalBrokerMessage>, BroccoliError>,
+        Result<Vec<InternalBrokerMessage>, BroccoliError>,
     > = None;
     let max: u64 = 10;
     while status.is_none() && retries < max {
@@ -477,10 +478,11 @@ pub async fn get_queued_transaction(
              &db,
             queue_name,
             auto_ack,
+            batch_size,
             "{err_msg}:'{queue_name}' Could not consume (removing from queue and adding to processed)",
         ).await;
         status = match transaction {
-        Ok(message) => Some(Ok(message)), // happy path
+        Ok(messages) => Some(Ok(messages)), // happy path
         Err(e) => match e {
             BroccoliError::BrokerNonIdempotentRetriableOp(_) => {
                 retries += 1;
@@ -497,9 +499,9 @@ pub async fn get_queued_transaction(
     }
      match status {
         Some(r) => match r {
-            Ok(message) => Ok(message),
+            Ok(messages) => Ok(messages),
             Err(e) => match e {
-                BroccoliError::BrokerNonIdempotentOp(_) => Ok(None),
+                BroccoliError::BrokerNonIdempotentOp(_) => Ok(vec![]),
                 e => Err(e)
             },
         },
@@ -513,64 +515,79 @@ pub async fn get_queued_transaction_impl(
     db: &Surreal<Any>,
     queue_name: &str,
     auto_ack: bool,
+    batch_size: usize,
     err_msg: &'static str,
-) -> Result<Option<InternalBrokerMessage>, BroccoliError> {
+) -> Result<Vec<InternalBrokerMessage>, BroccoliError> {
     let queue_table = self::queue_table(queue_name);
     let processing_table = self::processing_table(queue_name);
     let q = "
             BEGIN TRANSACTION;
             {
-                LET $m = {
-                    FOR $p IN 1..=5 {
-                        LET $output = SELECT * FROM ONLY type::thing($queue_table,type::range([[$p,None],[$p,time::now()]])) LIMIT 1;
-                        IF $output {
-                            RETURN $output;
-                        };
-                    };
-                };
+                -- first of all, we  extract messages up to the batch size limit, in priority order
+                LET $msgs = [1,2,3,4,5].fold({out_: [], remaining_: $batch_size, t_: $queue_table}, |$acc, $p| { 
+                    IF $acc.remaining_>0 {
+                        LET $output = SELECT * FROM type::thing($acc.t_,type::range([[$p,None],[$p,time::now()]])) LIMIT $acc.remaining_;
+                        LET $size = IF type::is::none($output) {RETURN 0} ELSE {RETURN array::len($output)};
+                        IF $size>0 {
+                        RETURN {out_: array::concat($acc.out_, $output), remaining_: $acc.remaining_-$size, t_: $acc.t_};
+                        } ELSE {
+                            RETURN $acc;
+                        }
+                    } ELSE {
+                            RETURN $acc;
+                    }
+                }).out_;
 
-                IF type::is::none($m) { -- nothing on the queue
+                IF !type::is::array($msgs) OR array::is_empty($msgs) { -- nothing on the queue
                     RETURN NONE
                 };
-                IF !$auto_ack {
-                    CREATE type::table($processing_table) CONTENT {
-                        id: type::thing($processing_table, $m.id[2]), // id[2] is the uuid
-                        message_id: $m.message_id,
-                        priority: $m.priority
+                -- next we iterate over the messages, create the in process if needed, delete and get payload
+                LET $payloads = array::fold($msgs, {out_: [], t_: $processing_table}, |$acc, $e|  {
+                    IF !$auto_ack {
+                        CREATE type::table($acc.t_) CONTENT {
+                            id: type::thing($acc.t_, $e.id[2]), // id[2] is the uuid
+                            message_id: $e.message_id,
+                            priority: $e.priority
+                        };
                     };
-                };
-                -- remove from queue and return payload
-                -- remember we don't delete from index, instead acknowledge/reject/cancel will do it
-                LET $deleted = DELETE $m.id RETURN BEFORE;
-                IF !$deleted {
-                    THROW 'Transaction failed as $m.id already deleted (CONCURRENT_READ)';
-                };
-                LET $payload = SELECT * FROM  $m.message_id;
-                $payload
+                    -- remove from queue and return payload
+                    -- remember we don't delete from index, instead acknowledge/reject/cancel will do it
+                    LET $deleted = DELETE $e.id RETURN BEFORE;
+                    IF !$deleted {
+                        -- if it was not deleted we will not abort the transaction, we just won't return the payload
+                        RETURN $acc;
+                    };
+                    LET $payload = SELECT * FROM ONLY $e.message_id;
+                    {out_: array::append($acc.out_, $payload), t_: $acc.t_};
+                });
+                $payloads.out_
             };
             COMMIT TRANSACTION;
+
     ";
     let result = db
         .query(q)
         .bind(("queue_table", queue_table))
         .bind(("processing_table", processing_table))
         .bind(("auto_ack", auto_ack))
+        .bind(("batch_size", batch_size))
         .await;
 
     match result {
         Ok(mut resp) => {
             let returned: Result<
-                Option<InternalSurrealDBBrokerMessage>,
+                Vec<InternalSurrealDBBrokerMessage>,
                 surrealdb::Error,
             > = resp.take(resp.num_statements() - 1);
             let transaction = resp.check(); //take(0 as usize);
             match transaction {
                 Ok(_) => {
                     match returned {
-                        Ok(returned) => match returned {
-                            Some(returned) => Ok(Some(returned.into())), // from internal to external rep
-                            None => Ok(None), // nothing on the queue
-                        },
+                        Ok(returned) =>
+                            Ok(returned.into_iter().map(|im| {
+                                let m: InternalBrokerMessage = im.into();
+                                m // from internal to external rep
+                            }).collect()), 
                         Err(e) => 
                         Err(transaction_error(&e,format!(
                     "{err_msg}:'{queue_name}' Could not remove+read from queue in transaction (taking deleted value): {e}"
