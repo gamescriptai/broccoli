@@ -79,85 +79,94 @@ impl SurrealDBBroker {
     pub async fn client_from_url(
         broker_url: &str,
     ) -> Result<std::option::Option<Surreal<Any>>, BroccoliError> {
-        let url = Url::parse(broker_url)
-            .map_err(|e| BroccoliError::Broker(format!("Failed to parse connection URL: {e:?}")))?;
-        let config = SurrealDBConnectionConfig {
-            username: Self::get_param_value(&url, "username")
-                .unwrap_or_else(|_| "root".to_string()),
-            password: Self::get_param_value(&url, "password")
-                .unwrap_or_else(|_| "root".to_string()),
-            ns: Self::get_param_value(&url, "ns").unwrap_or_else(|_| "test".to_string()),
-            database: Self::get_param_value(&url, "database")
-                .unwrap_or_else(|_| "test".to_string()),
-        };
-
-        let scheme = url.scheme();
-        if scheme == "ws" && !url.has_host() {
-            return Err(BroccoliError::Broker(
-                "Failed to coonect to SurrealDB: Missing ws://host or mem://".to_string(),
-            ));
-        }
-        if scheme != "ws" && scheme != "mem" {
-            return Err(BroccoliError::Broker(
-                "Failed to connect to SurrealDB: only ws:// or mem:// are supported".to_string(),
-            ));
-        }
-        let port = url.port();
-        if scheme == "ws" && port.is_none() {
-            return Err(BroccoliError::Broker(
-                "Failed to connect to SurrealDB: missing port number".to_string(),
-            ));
-        }
-        let connection_url = if scheme == "ws" {
-            format!(
-                "ws://{}:{}/rpc",
-                url.host_str().unwrap_or("localhost"),
-                port.unwrap_or(8000)
-            )
-        } else {
-            "mem://".to_string()
-        };
-
-        let db = connect(connection_url)
-            .await
-            .map_err(|e| BroccoliError::Broker(format!("Failed to connect to SurrealDB: {e:?}")))?;
-
-        if scheme == "ws" {
-            // credentials not relevant for mem://
-            db.signin(surrealdb::opt::auth::Root {
-                username: &config.username,
-                password: &config.password,
-            })
-            .await
-            .map_err(|e| {
-                BroccoliError::Broker(format!("Incorrect credentials for SurrealDB: {e:?}"))
-            })?;
-        }
-        // Select a specific namespace / database
-        db.use_ns(config.ns)
-            .use_db(config.database)
-            .await
-            .map_err(|e| BroccoliError::Broker(format!("NS/DB not found for SurrealDB: {e:?}")))?;
-        log::info!("fully connected.");
-
-        Ok(Some(db))
+        client_from_url(broker_url).await
     }
 
-    /// helper: given a url get a named parameter
-    pub(crate) fn get_param_value(url: &Url, name: &str) -> Result<String, BroccoliError> {
-        url.query_pairs()
-            .find(|(k, _)| k == name)
-            .map(|(_, v)| v.into_owned())
-            .map_or_else(
-                || {
-                    Err(BroccoliError::Broker(format!(
-                        "Missing connection param: {name}"
-                    )))
-                },
-                Ok,
-            )
-    }
 }
+
+/// public so we can call it from testing
+pub async fn client_from_url(
+        broker_url: &str,
+) -> Result<std::option::Option<Surreal<Any>>, BroccoliError> {
+    let url = Url::parse(broker_url)
+        .map_err(|e| BroccoliError::Broker(format!("Failed to parse connection URL: {e:?}")))?;
+    let config = SurrealDBConnectionConfig {
+        username: get_param_value(&url, "username")
+            .unwrap_or_else(|_| "root".to_string()),
+        password: get_param_value(&url, "password")
+            .unwrap_or_else(|_| "root".to_string()),
+        ns: get_param_value(&url, "ns").unwrap_or_else(|_| "test".to_string()),
+        database: get_param_value(&url, "database")
+            .unwrap_or_else(|_| "test".to_string()),
+    };
+
+    let scheme = url.scheme();
+    if scheme == "ws" && !url.has_host() {
+        return Err(BroccoliError::Broker(
+            "Failed to coonect to SurrealDB: Missing ws://host or mem://".to_string(),
+        ));
+    }
+    if scheme != "ws" && scheme != "mem" {
+        return Err(BroccoliError::Broker(
+            "Failed to connect to SurrealDB: only ws:// or mem:// are supported".to_string(),
+        ));
+    }
+    let port = url.port();
+    if scheme == "ws" && port.is_none() {
+        return Err(BroccoliError::Broker(
+            "Failed to connect to SurrealDB: missing port number".to_string(),
+        ));
+    }
+    let connection_url = if scheme == "ws" {
+        format!(
+            "ws://{}:{}/rpc",
+            url.host_str().unwrap_or("localhost"),
+            port.unwrap_or(8000)
+        )
+    } else {
+        "mem://".to_string()
+    };
+
+    let db = connect(connection_url)
+        .await
+        .map_err(|e| BroccoliError::Broker(format!("Failed to connect to SurrealDB: {e:?}")))?;
+
+    if scheme == "ws" {
+        // credentials not relevant for mem://
+        db.signin(surrealdb::opt::auth::Root {
+            username: &config.username,
+            password: &config.password,
+        })
+        .await
+        .map_err(|e| {
+            BroccoliError::Broker(format!("Incorrect credentials for SurrealDB: {e:?}"))
+        })?;
+    }
+    // Select a specific namespace / database
+    db.use_ns(config.ns)
+        .use_db(config.database)
+        .await
+        .map_err(|e| BroccoliError::Broker(format!("NS/DB not found for SurrealDB: {e:?}")))?;
+    log::info!("fully connected.");
+
+    Ok(Some(db))
+}
+
+/// helper: given a url get a named parameter
+pub(crate) fn get_param_value(url: &Url, name: &str) -> Result<String, BroccoliError> {
+    url.query_pairs()
+        .find(|(k, _)| k == name)
+        .map(|(_, v)| v.into_owned())
+        .map_or_else(
+            || {
+                Err(BroccoliError::Broker(format!(
+                    "Missing connection param: {name}"
+                )))
+            },
+            Ok,
+        )
+}
+
 
 // convenience into and from conversion between the broccoli and the surrealdb layer
 
@@ -230,6 +239,8 @@ fn message_record_id(queue_name: &str, task_id: &str) -> Result<RecordId, Brocco
         ))),
     }
 }
+
+
 
 /// time+id range record id, namely `queue_table:[priority, when,<uuid>task_id]`
 fn queue_record_id(
@@ -453,7 +464,7 @@ async fn remove_from_queue_index(
     match deleted {
         Some(deleted) => Ok(deleted), // happy path
         None => Err(BroccoliError::Broker(format!(
-            "{err_msg}:'{queue_name}': removing from queue index (silently did not add)",
+            "{err_msg}:'{queue_name}': removing from queue index (silently did not delete)",
         ))),
     }
 }
@@ -511,7 +522,7 @@ pub async fn get_queued_transaction(
     }
 
 }
-pub async fn get_queued_transaction_impl(
+pub(crate) async fn get_queued_transaction_impl(
     db: &Surreal<Any>,
     queue_name: &str,
     auto_ack: bool,
@@ -552,7 +563,10 @@ pub async fn get_queued_transaction_impl(
                     };
                     IF !$auto_ack {
                         CREATE type::table($acc.t_) CONTENT {
-                            id: type::thing($acc.t_, $e.id[2]), // id[2] is the uuid
+                            // loses the uuid, see https://github.com/surrealdb/surrealdb/issues/6104
+                            //id: type::thing($acc.t_, $e.id[2]), // id[2] is the uuid
+                            // we forcefully add it
+                            id: type::record($acc.t_+':u\\''+<string>$e.id[2]+'\\''), // id[2] is the uuid
                             message_id: $e.message_id,
                             priority: $e.priority
                         };
@@ -603,14 +617,14 @@ pub async fn get_queued_transaction_impl(
         }
         Err(e) => Err(transaction_error(
             &e,
-            format!("{err_msg}:'{queue_name}' Could not get queued+readß in transaction: {e}"),
+            format!("{err_msg}:'{queue_name}' Could not get queued+read in transaction: {e}"),
         )),
     }
 }
 
 /// remove from ordered queue
 /// `queued_message_id` must be: queue:[priority, timestamp, `task_id`]
-pub async fn remove_from_queue(
+pub(crate) async fn remove_from_queue(
     db: &Surreal<Any>,
     queue_name: &str,
     queued_message_id: RecordId, // queue:[priority, timestamp, task_id]
@@ -645,7 +659,10 @@ async fn remove_from_queue_add_to_processed_transaction_impl(
             BEGIN TRANSACTION;
             {
                 CREATE type::table($processing_table) CONTENT {
-                    id: type::thing($processing_table, $message_id), -- this will take the id part of it
+                    // loses the uuid, see https://github.com/surrealdb/surrealdb/issues/6104
+                    //id: type::thing($processing_table, record::id($message_id)),
+                    // we forcefully add it
+                    id: type::record($acc.t_+':u\\''+<string>record::id($message_id)+'\\''), // id[2] is the uuid                            
                     message_id: $message_id,
                     priority: $priority
                 };
@@ -654,7 +671,7 @@ async fn remove_from_queue_add_to_processed_transaction_impl(
                 -- (remember we don't delete from index, instead acknowledge/reject/cancel will do it)
                 LET $m = DELETE $queued_message_id RETURN BEFORE;
                 IF !$m {
-                    THROW 'Transaction failed as $queued_message_id already deleted (CONCURRENT_READ)';
+                    THROW 'Transaction failed removing from queue, '+<string>$queued_message_id+' already deleted (CONCURRENT_READ)';
                 };
                 $m
             };
@@ -717,7 +734,7 @@ async fn remove_from_queue_add_to_processed_transaction_impl(
 /// (unused at the moment as it allows for concurrent reads)
 /// `queued_message_id` must be: queue:[timestamp, `task_id`]
 /// returns None if the record is not in the queue anymore, most likely due to a concurrent read
-pub async fn remove_from_queue_add_to_processed_transaction(   
+pub(crate) async fn remove_from_queue_add_to_processed_transaction(   
     db: &Surreal<Any>,
     queue_name: &str,
     queued_message: InternalSurrealDBBrokerMessageEntry,
@@ -778,7 +795,7 @@ fn transaction_error(e: &surrealdb::Error, msg: String) -> BroccoliError {
 }
 
 /// given the user facing task id, remove from the queue
-pub async fn remove_queued_from_index(
+pub(crate) async fn remove_queued_from_index(
     db: &Surreal<Any>,
     queue_name: &str,
     task_id: &str,
@@ -869,7 +886,7 @@ pub async fn update_message(
 }
 
 /// get the message payload given the queue record
-pub async fn get_message_from(
+pub(crate) async fn get_message_from(
     db: &Surreal<Any>,
     queue_name: &str,
     queued_message: InternalSurrealDBBrokerMessageEntry,
@@ -903,8 +920,8 @@ pub async fn get_message(
 
 /// remove actual message (the one with the payload)
 /// we also remove it from the internal index
-/// `message_id`: <`queue_table>`:[<`task_id`>]
-pub async fn remove_message(
+/// `message_id`: `<queue_table>`:[<`task_id`>]
+pub(crate) async fn remove_message(
     db: &Surreal<Any>,
     queue_name: &str,
     message_id: RecordId, //<queue_table>:[<task_id>]
@@ -928,15 +945,25 @@ pub async fn remove_message(
 }
 
 /// remove from the processing queue
-pub async fn remove_from_processing(
+pub(crate) async fn remove_from_processing(
     db: &Surreal<Any>,
     queue_name: &str,
     message_id: &String,
     err_msg: &'static str,
 ) -> Result<InternalSurrealDBBrokerMessageEntry, BroccoliError> {
     let processing_table = self::processing_table(queue_name);
+    let uuid = match surrealdb::sql::Uuid::from_str(&message_id) {
+            Ok(uuid) => Ok(uuid),
+            Err(_) => Err(BroccoliError::Broker(format!(
+                "Incorrect uuid {}",
+                &message_id
+            ))),
+        }?;
+    let uuid: surrealdb::sql::Id = uuid.into();
+    let message_id = surrealdb::sql::Thing::from((processing_table, uuid));
+    let record_id = RecordId::from_inner(message_id.clone());
     let processed: Option<InternalSurrealDBBrokerMessageEntry> = db
-        .delete((processing_table, message_id))
+        .delete(record_id)
         .await
         .map_err(|e| BroccoliError::Broker(format!("{err_msg}:'{queue_name}' {e}")))?;
     processed.map_or_else(
@@ -947,6 +974,83 @@ pub async fn remove_from_processing(
         },
         Ok,
     )
+}
+
+pub(crate) async fn remove_message_and_from_processing_transaction(
+    db: &Surreal<Any>,
+    queue_name: &str,
+    task_id: &str,
+        err_msg: &'static str,
+) -> Result<InternalSurrealDBBrokerMessageEntry, BroccoliError> {
+//) -> Result<(), BroccoliError> {
+    let processing_table = processing_table(queue_name);
+    let index_table = index_table(queue_name);
+    let q = "
+        BEGIN TRANSACTION;
+        {
+            -- see https://github.com/surrealdb/surrealdb/issues/6104 for context on the weird conversions
+            -- delete payload
+            LET $message_id = type::record($queue_name+':u\\''+$task_id+'\\'');
+            LET $m = DELETE $message_id RETURN BEFORE;
+            IF !$m {
+                THROW 'Transaction failed removing payload, '+<string>$message_id+ ' already deleted (CONCURRENT_READ)';
+            };
+            -- remove from index
+            LET $index_id = type::thing($index_table, [<uuid>$task_id, $queue_name]);
+            LET $idx = DELETE $index_id RETURN BEFORE;
+            IF !$idx {
+                THROW 'Transaction failed removing index, '+<string>$index_id+' already deleted (CONCURRENT_READ)';
+            };
+            -- remove from processing
+            LET $processing_id = type::record($processing_table+':u\\''+$task_id+'\\'');
+            LET $p = DELETE $processing_id RETURN BEFORE;
+            IF !$p {
+                THROW 'Transaction failed removing from processing, '+<string>$processing_id+' already deleted (CONCURRENT_READ)';
+            };
+            $p
+        };
+        COMMIT TRANSACTION;
+    ";
+
+        let result = db
+        .query(q)
+        .bind(("queue_name", queue_name.to_owned()))
+        .bind(("processing_table", processing_table))
+        .bind(("index_table", index_table))
+        .bind(("task_id", task_id.to_owned()))
+        .await;
+    match result {
+        Ok(mut resp) => {
+            let returned: Result< Option<InternalSurrealDBBrokerMessageEntry>, surrealdb::Error> = resp.take(resp.num_statements()-1);
+            let transaction = resp.check();
+            match transaction {
+                Ok(_) => match returned {
+                    Ok(returned) => match returned {
+                        Some(entry) => Ok(entry),
+                        None => Err( BroccoliError::Broker(
+                            format!("'{queue_name}' Could not ack in transaction (nothing returned)"),
+                        )),
+                    },
+                    Err(e) => Err(transaction_error(
+            &e,
+            format!("{err_msg}:'{queue_name}' Could not ack in transaction (response issue): {e}"),
+        )),
+                },
+        Err(e) => Err(transaction_error(
+            &e,
+            format!("{err_msg}:'{queue_name}' Could not ack in transaction (could not take): {e}"),
+        )),
+
+            }
+        },
+        Err(e) => Err(transaction_error(
+            &e,
+            format!("{err_msg}:'{queue_name}' Could not ack in transaction: {e}"),
+        )),
+
+    }
+    //Ok(())
+
 }
 
 /// add to the failed queue, will also remove from index

@@ -347,25 +347,13 @@ impl Broker for SurrealDBBroker {
     ) -> Result<(), BroccoliError> {
         let db = self.check_connected()?;
 
-        // 1: remove from processing queue
-        let processing = utils::remove_from_processing(
+        let _ = utils::remove_message_and_from_processing_transaction(
             &db,
             queue_name,
             &message.task_id,
-            "Could not acknowledge (remove from processing)",
+            "Could not acknowledge in transaction ",
         )
         .await?;
-
-        // 2: remove actual message
-        utils::remove_message(
-            &db,
-            queue_name,
-            processing.message_id,
-            &message.task_id,
-            "Could not acknowledge (remove message)",
-        )
-        .await?;
-
         Ok(())
     }
 

@@ -478,7 +478,7 @@ async fn test_message_acknowledgment() {
         .consume::<TestMessage>(test_topic, Some(consume_options.clone()))
         .await
         .expect("Failed to consume message");
-
+    //panic!();
     queue
         .acknowledge(test_topic, consumed)
         .await
@@ -510,6 +510,27 @@ async fn test_message_acknowledgment() {
 
         let processing: usize = redis.llen(processing_queue).await.unwrap();
         assert_eq!(processing, 0, "Processing queue should be empty");
+    }
+
+    #[cfg(feature = "surrealdb")]
+    {
+        // we verify processing and index tables are empty
+        let db = common::get_surrealdb_client().await;
+        let mut res = db
+            .query("(SELECT VALUE COUNT() FROM test_ack_topic___processing GROUP ALL).count")
+            .await
+            .unwrap();
+        let c: Option<i64> = res.take(0).unwrap();
+        let c = c.unwrap();
+        assert_eq!(0, c);
+        let db = common::get_surrealdb_client().await;
+        let mut res = db
+            .query("(SELECT VALUE COUNT() FROM test_ack_topic___index GROUP ALL).count")
+            .await
+            .unwrap();
+        let c: Option<i64> = res.take(0).unwrap();
+        let c = c.unwrap();
+        assert_eq!(0, c);
     }
 }
 

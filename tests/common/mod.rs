@@ -11,13 +11,6 @@ pub async fn setup_queue() -> BroccoliQueue {
         .expect("Queue setup failed. Are you sure Redis/RabbitMQ/SurrealDB is running?")
 }
 
-#[cfg(feature = "redis")]
-pub async fn get_redis_client() -> redis::aio::MultiplexedConnection {
-    let queue_url = std::env::var("BROCCOLI_QUEUE_URL").unwrap();
-    let client = redis::Client::open(queue_url).unwrap();
-    client.get_multiplexed_async_connection().await.unwrap()
-}
-
 pub async fn setup_queue_with_url(
     url: &str,
 ) -> Result<BroccoliQueue, broccoli_queue::error::BroccoliError> {
@@ -25,4 +18,21 @@ pub async fn setup_queue_with_url(
         .pool_connections(5)
         .build()
         .await
+}
+
+#[cfg(feature = "redis")]
+pub async fn get_redis_client() -> redis::aio::MultiplexedConnection {
+    let queue_url = std::env::var("BROCCOLI_QUEUE_URL").unwrap();
+    let client = redis::Client::open(queue_url).unwrap();
+    client.get_multiplexed_async_connection().await.unwrap()
+}
+
+#[cfg(all(feature = "surrealdb", test))]
+pub async fn get_surrealdb_client() -> surrealdb::Surreal<surrealdb::engine::any::Any> {
+    let queue_url = std::env::var("BROCCOLI_QUEUE_URL").unwrap();
+    let db = broccoli_queue::brokers::surrealdb::utils::client_from_url(&queue_url)
+        .await
+        .unwrap()
+        .unwrap();
+    db
 }

@@ -196,7 +196,10 @@ async fn benchmark_raw_surrealdb_throughput(db: &Surreal<Any>, message_count: us
                     RETURN NONE // no data available
                 };
                 CREATE type::table($processing_table) CONTENT {
-                    id: type::thing($processing_table, $m.id[2]),
+                    // loses the uuid, see https://github.com/surrealdb/surrealdb/issues/6104
+                    //id: type::thing($acc.t_, $e.id[2]), // id[2] is the uuid
+                    // we forcefully add it
+                    id: type::record($acc.t_+':u\\''+<string>$e.id[2]+'\\''), // id[2] is the uuid
                     message_id: $m.message_id,
                     priority: $m.priority
                 };
