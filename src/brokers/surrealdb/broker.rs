@@ -393,35 +393,32 @@ impl Broker for SurrealDBBroker {
                 .as_ref()
                 .map_or(true, |config| config.retry_failed.unwrap_or(true))
         {
-            let msg = utils::get_message(
-                &db,
-                queue_name,
-                rejected.message_id.clone(),
-                "Could not reject (get original)",
-            )
-            .await?;
             // // 2: we nuke the old message // //
+            let task_id = message.task_id.clone();
             let removed = utils::remove_message(
                 &db,
                 queue_name,
                 rejected.message_id,
-                &message.task_id,
+                &task_id,
                 "Could not reject (removing message)",
             )
             .await?;
 
-            // // 4: add to failed if excceded all attempts // //
+            // // 2: add to failed if exceeded all attempts // //
+            // note we add to failed the passed message and not
+            // the stored one, as caller may add extra information to it
+            // for instance the reason for the rejection
             utils::add_to_failed(
                 &db,
                 queue_name,
                 removed.task_id,
-                msg,
+                message,
                 "Could not reject (adding to failed)",
             )
             .await?;
             log::error!(
                 "Message {} has reached max attempts and has been pushed to failed queue",
-                message.task_id
+                &task_id
             );
             return Ok(());
         }

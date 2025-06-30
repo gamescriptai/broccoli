@@ -84,7 +84,7 @@ impl SurrealDBBroker {
 
 }
 
-/// public so we can call it from testing
+/// helper: public so we can call it from testing
 pub async fn client_from_url(
         broker_url: &str,
 ) -> Result<std::option::Option<Surreal<Any>>, BroccoliError> {
@@ -169,7 +169,6 @@ pub(crate) fn get_param_value(url: &Url, name: &str) -> Result<String, BroccoliE
 
 
 // convenience into and from conversion between the broccoli and the surrealdb layer
-
 impl From<InternalSurrealDBBrokerMessage> for InternalBrokerMessage {
     fn from(val: InternalSurrealDBBrokerMessage) -> Self {
         Self {
@@ -202,20 +201,21 @@ impl InternalSurrealDBBrokerMessage {
     }
 }
 
-/// this table holds a timesorted timeseries, <`queue_name>`:[<priority>,<timestamp>,<taskid>]
+// // helpers that get the table names for from a queue_name
+// // ___queue: time series, bucketed by priority, timestamp, and task id
+// // ___processing: in process
+// // ___index: index to go from message to the ___queue, useful to cancel
+// // ___failed: failed messages table
+
+/// this table holds a timesorted timeseries, `<queue_name>`:[<priority>,<timestamp>,u<taskid>]
 /// and acts as the queue
 pub fn queue_table(queue_name: &str) -> String {
     format!("{queue_name}___queue")
 }
 
-/// this table holds messages in process
+/// table holds messages in process
 fn processing_table(queue_name: &str) -> String {
     format!("{queue_name}___processing")
-}
-
-/// this is the failed messages table
-fn failed_table(queue_name: &str) -> String {
-    format!("{queue_name}___failed")
 }
 
 /// this is an index to go from <queue_name>___index:[u<taskid>,<queuename>] to the queue table
@@ -224,7 +224,13 @@ fn index_table(queue_name: &str) -> String {
     format!("{queue_name}___index")
 }
 
-// queue_name + task id : namely `queue_name:<uuid>task_id`
+/// this is the failed messages table
+fn failed_table(queue_name: &str) -> String {
+    format!("{queue_name}___failed")
+}
+
+
+/// queue_name + task id : namely `queue_name:<uuid>task_id`
 fn message_record_id(queue_name: &str, task_id: &str) -> Result<RecordId, BroccoliError> {
     match surrealdb::sql::Uuid::from_str(task_id) {
         Ok(uuid) => {
@@ -273,7 +279,7 @@ fn index_record_id(task_id: &str, queue_name: &str) -> Result<RecordId, Broccoli
     Ok(index_record_id)
 }
 
-/// add to the timeseries
+/// add to the end of the timeseries queue without scheduling
 pub async fn add_to_queue(
     db: &Surreal<Any>,
     queue_name: &str,
@@ -282,11 +288,10 @@ pub async fn add_to_queue(
     err_msg: &'static str,
 ) -> Result<(), BroccoliError> {
     let now = surrealdb::sql::Datetime::default(); // this is now()
-    let _ = self::add_to_queue_scheduled(db, queue_name, task_id, priority, now, err_msg).await?;
-    Ok(())
+    self::add_to_queue_scheduled(db, queue_name, task_id, priority, now, err_msg).await
 }
 
-/// add to the timeseries with a delay duration
+/// add to the end of the timeseries queue with a delay duration
 pub async fn add_to_queue_delayed(
     db: &Surreal<Any>,
     queue_name: &str,
@@ -295,7 +300,7 @@ pub async fn add_to_queue_delayed(
     delay: Duration,
     err_msg: &'static str,
 ) -> Result<(), BroccoliError> {
-    // this is a convoluted conversion surrealdb::sql::Datetime does not support adding
+    // this is a convoluted conversion as surrealdb::sql::Datetime does not support adding
     // we convert to chrono structures and add, and then convert back
     let now: chrono::DateTime<chrono::Utc> = surrealdb::sql::Datetime::default().into();
     let secs = delay.whole_seconds();
@@ -304,8 +309,7 @@ pub async fn add_to_queue_delayed(
     let delay = chrono::TimeDelta::new(secs, ns).unwrap_or_default();
     let when = now.checked_add_signed(delay).unwrap_or_else(|| now);
     let when: surrealdb::sql::Datetime = when.into();
-    let _ = self::add_to_queue_scheduled(db, queue_name, task_id, priority, when, err_msg).await?;
-    Ok(())
+    self::add_to_queue_scheduled(db, queue_name, task_id, priority, when, err_msg).await
 }
 
 /// add to the timeseries at a scheduled time, can be in the past and it will be triggered immediately
@@ -320,7 +324,7 @@ pub async fn add_to_queue_scheduled(
     self::add_record_to_queue(db, queue_name, task_id, priority, when, err_msg).await
 }
 
-// implementation
+// internal implementation to add the record to the timeseries queue
 async fn add_record_to_queue(
     db: &Surreal<Any>,
     queue_name: &str,
@@ -340,44 +344,15 @@ async fn add_record_to_queue(
         message_id: message_record_id.clone(),
         priority,
     };
-    let mut retries: u64 = 0;
-    let mut status: Option<Result<Option<InternalSurrealDBBrokerMessageEntry>, BroccoliError>> =
-        None;
-    let max: u64 = 10;
-    while status.is_none() && retries < max {
+    let mut retryable = RetriableSurrealDBResult::new(format!("{err_msg}:'{queue_name}': adding to queue"));
+    while !retryable.is_done() {
         let result: Result<Option<InternalSurrealDBBrokerMessageEntry>, surrealdb::Error> = db
             .create(queue_record_id.clone())
             .content(msg.clone())
             .await;
-        status = match result {
-            Ok(r) => Some(Ok(r)),
-            Err(e) => {
-                if format!("{}", &e).contains("This transaction can be retried") {
-                    tokio::time::sleep(tokio::time::Duration::from_millis(retries)).await;
-                    retries += 1;
-                    None
-                } else {
-                    Some(Err(BroccoliError::Broker(format!(
-                        "{err_msg}:'{queue_name}': adding to queue: {}",
-                        e,
-                    ))))
-                }
-            }
-        }
+        retryable = retryable.step(result).await;
     }
-    let qm = match status {
-        Some(qm) => qm,
-        None => Err(BroccoliError::Broker(format!(
-            "{err_msg}:'{queue_name}': adding to queue (max number of retries)",
-        ))),
-    }?;
-    // let qm: Option<InternalSurrealDBBrokerMessageEntry> = db
-    // .create(queue_record_id.clone())
-    // .content(msg)
-    // .await
-    // .map_err(|e: surrealdb::Error| {
-    //     BroccoliError::Broker(format!("{err_msg}:'{queue_name}': {e}"))
-    // })?;
+    let qm =retryable.wrapup()?;
     match qm {
         Some(_) => {
             // now we insert into the index and we are done, note we insert the queue id
@@ -479,49 +454,28 @@ pub async fn get_queued_transaction(
     batch_size: usize,
     err_msg: &'static str,
 ) -> Result<Vec<InternalBrokerMessage>, BroccoliError> {
-        let mut retries: u64 = 0;
-    let mut status: Option<
-        Result<Vec<InternalBrokerMessage>, BroccoliError>,
-    > = None;
-    let max: u64 = 10;
-    while status.is_none() && retries < max {
+    let mut retryable = RetriableSurrealDBResult::new(format!("{err_msg}:'{queue_name}': transaction consume"));
+    while !retryable.is_done() {
         let transaction = get_queued_transaction_impl(
              &db,
             queue_name,
             auto_ack,
             batch_size,
-            "{err_msg}:'{queue_name}' Could not consume (removing from queue and adding to processed)",
+            "{err_msg}:'{queue_name}' tramsaction consume (removing from queue and adding to processed)",
         ).await;
-        status = match transaction {
-        Ok(messages) => Some(Ok(messages)), // happy path
+        retryable = retryable.step(transaction).await;
+    }
+    // if we had a typed race condition error, we return empty, as someone else
+    // got the queued transaction first (optimistic locking)
+     match retryable.wrapup() {
+        Ok(r) => Ok(r),
         Err(e) => match e {
-            BroccoliError::BrokerNonIdempotentRetriableOp(_) => {
-                retries += 1;
-                tokio::time::sleep(tokio::time::Duration::from_millis(
-                    retries,
-                ))
-                .await;
-                None
-            },
-            // this includes the BrokerNonIdempotenteOp which will be processed out of the loop
-            e => Some(Err(e)),
-        }, 
-        };
-    }
-     match status {
-        Some(r) => match r {
-            Ok(messages) => Ok(messages),
-            Err(e) => match e {
-                BroccoliError::BrokerNonIdempotentOp(_) => Ok(vec![]),
-                e => Err(e)
-            },
+            BroccoliError::BrokerNonIdempotentOp(_) => Ok(vec![]),
+            e => Err(e)
         },
-        None => Err(BroccoliError::BrokerNonIdempotentOp(
-            format!("{err_msg}:'{queue_name}': Could not consume (max number of retries)"),
-        )),
     }
-
 }
+
 pub(crate) async fn get_queued_transaction_impl(
     db: &Surreal<Any>,
     queue_name: &str,
@@ -658,13 +612,17 @@ async fn remove_from_queue_add_to_processed_transaction_impl(
     let q = "
             BEGIN TRANSACTION;
             {
-                CREATE type::table($processing_table) CONTENT {
-                    // loses the uuid, see https://github.com/surrealdb/surrealdb/issues/6104
-                    //id: type::thing($processing_table, record::id($message_id)),
-                    // we forcefully add it
-                    id: type::record($acc.t_+':u\\''+<string>record::id($message_id)+'\\''), // id[2] is the uuid                            
+                // loses the uuid, see https://github.com/surrealdb/surrealdb/issues/6104
+                // type::thing($processing_table, record::id($message_id)),
+                // we forcefully set it
+                LET $processing_id = type::record($processing_table+':u\\''+<string>record::id($message_id)+'\\'');
+                LET $c = CREATE type::table($processing_table) CONTENT {
+                    id: $processing_id,                            
                     message_id: $message_id,
                     priority: $priority
+                } RETURN AFTER;
+                IF !$c {
+                    THROW 'Transaction failed adding to processing, '+<string>$processing_id;
                 };
                 -- if message is still in the queue, remove it and return payload
                 -- otherwise we explicitly abort the transaction
@@ -740,47 +698,24 @@ pub(crate) async fn remove_from_queue_add_to_processed_transaction(
     queued_message: InternalSurrealDBBrokerMessageEntry,
     err_msg: &'static str,
 ) -> Result<Option<InternalSurrealDBBrokerMessageEntry>, BroccoliError> {
-    let mut retries: u64 = 0;
-    let mut status: Option<
-        Result<InternalSurrealDBBrokerMessageEntry, BroccoliError>,
-    > = None;
-    let max: u64 = 10;
-    while status.is_none() && retries < max {
+    let mut retryable = RetriableSurrealDBResult::new(format!("{err_msg}:'{queue_name}': consume transaction"));
+    while !retryable.is_done() {
         let transaction = remove_from_queue_add_to_processed_transaction_impl(
              &db,
             queue_name,
             queued_message.clone(),
-            "{err_msg}:'{queue_name}' Could not consume (removing from queue and adding to processed)",
+            "{err_msg}:'{queue_name}' consume transaction (removing from queue and adding to processed)",
         ).await;
-        status = match transaction {
-        Ok(message) => Some(Ok(message)), // happy path
+        retryable = retryable.step(transaction).await;
+    }
+     match retryable.wrapup() {
+        Ok(r) => Ok(Some(r)),
         Err(e) => match e {
-            BroccoliError::BrokerNonIdempotentRetriableOp(_) => {
-                retries += 1;
-                tokio::time::sleep(tokio::time::Duration::from_millis(
-                    retries,
-                ))
-                .await;
-                None
-            },
-            // this includes the BrokerNonIdempotenteOp which will be processed out of the loop
-            e => Some(Err(e)),
-        }, 
-        };
-    }
-     match status {
-        Some(r) => match r {
-            Ok(message) => Ok(Some(message)),
-            Err(e) => match e {
-                BroccoliError::BrokerNonIdempotentOp(_) => Ok(None),
-                e => Err(e)
-            },
+            BroccoliError::BrokerNonIdempotentOp(_) => Ok(None),
+            e => Err(e)
         },
-        None => Err(BroccoliError::BrokerNonIdempotentOp(
-            format!("{err_msg}:'{queue_name}': Could not consume (max number of retries)"),
-        )),
+        
     }
-
 }
 
 fn transaction_error(e: &surrealdb::Error, msg: String) -> BroccoliError {
@@ -1067,7 +1002,7 @@ pub async fn add_to_failed(
     // - plan uuid (non-surrealdb, reexported by surrealdb as surrealdb::uuid) as that is the only
     //   one that record id accepts (amazingly)
     let failed_table = self::failed_table(queue_name);
-    // none of these conversions work
+    // none of these conversions work, here for reference
     // let uuid_value: Value = message_id.into();
     // let uuid_value: Value = plain_uuid.into();
     // let uuid_key: RecordIdKey = uuid_value.into();
@@ -1095,4 +1030,57 @@ pub async fn add_to_failed(
         .await
         .map_err(|e| BroccoliError::Broker(format!("{err_msg}:'{queue_name}' {e}")))?;
     Ok(())
+}
+
+/// helper to process results from surrealdb that are retriable
+pub(crate) struct RetriableSurrealDBResult<T> {
+    retries: u8,
+    status: Option<Result<T, BroccoliError>>,
+    max: u8,
+    prefix: String,
+} 
+
+impl<T> RetriableSurrealDBResult<T> {
+    
+    // create a new retriable result with this error message prefix
+    fn new(prefix: String) -> Self{
+        RetriableSurrealDBResult{ retries: 0, status: None, max: 10, prefix } 
+    }
+
+    // we either have a result or we have exhausted the number of retries
+    fn is_done(&self) -> bool {
+        self.status.is_some() || self.retries >= self.max
+    }
+
+    // take a surrealdb result and process it, updating internal state
+    // if the result is a retriable transaction, sleep for a small number of ms
+    async fn step<E>(mut self, result: Result<T, E>) -> Self
+    where E: std::fmt::Display, {
+        match result {
+            Ok(r) => 
+                self.status = Some(Ok(r)),
+            Err(e) => if format!("{}", &e).contains("This transaction can be retried") {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(self.retries as u64)).await;
+                    self.retries += 1;
+                } else {
+                    self.status = Some(Err(BroccoliError::Broker(format!(
+                        "{}: {}",
+                        self.prefix,
+                        e,
+                    ))))
+                }
+        }
+        self
+    }
+
+    // wrapup, either get the original result, wrapped in a broccoli error
+    // or a too many retries error
+    fn wrapup(self) -> Result<T, BroccoliError> {
+        match self.status {
+            Some(result) => result,
+            None => Err(BroccoliError::Broker(format!(
+                "{} (max number of retries)",self.prefix
+            ))),
+        }
+    }
 }

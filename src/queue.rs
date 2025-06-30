@@ -221,9 +221,9 @@ pub struct ConsumeOptions {
     pub fairness: Option<bool>,
     /// how long to wait in tight consumer loops, defaults to zero for `process_messages` and `process_messages_with_handlers`,
     /// and 500ms for `consume`, which allows those functions to be stopped in a `tokkio::spawn` thread
+    /// Unfortunately, since the options builder can be used in a constant setting, we cannot
+    /// add a CancellationToken as an option which would be great way to stop gracefully
     pub consume_wait: Option<std::time::Duration>,
-    // unfortunately, since the options builder can be used in a constant setting, we cannot
-    // add a CancellationToken as an option which would be great way to stop gracefully
 }
 
 impl Default for ConsumeOptions {

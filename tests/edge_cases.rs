@@ -491,6 +491,7 @@ async fn process_job(m: TestMessage) -> Result<(), BroccoliError> {
     let mut lock = processed.lock().await;
     let value = m.id.parse::<usize>().expect("should have id as an int");
     *lock += value;
+    //log::info!("process_job: {}", &lock);
     Ok(())
 }
 
@@ -499,7 +500,6 @@ async fn process_job(m: TestMessage) -> Result<(), BroccoliError> {
 #[tokio::test]
 async fn test_multiple_batch_publish_and_handler() {
     // similar situation with handlers
-
     let test_topic = "test_multiple_batch_publish_and_handler_topic";
     let queue = common::setup_queue().await;
 
@@ -525,6 +525,7 @@ async fn test_multiple_batch_publish_and_handler() {
             let _lock: Option<()> = None;
         }
         // CRITICAL AREA END //
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
         let queue_clone = queue.clone();
         let consumer = tokio::spawn(async move {
             let _ = queue_clone
@@ -535,7 +536,7 @@ async fn test_multiple_batch_publish_and_handler() {
             panic!("Spawn should have been killed while processing");
         });
         // let's give time to the consumer to get execution time
-        // tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(2)).await;
         log::info!("publishing...");
         let published: Vec<TestMessage> = queue
             .publish_batch(test_topic, None, messages.clone(), None)
