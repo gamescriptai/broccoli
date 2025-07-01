@@ -48,14 +48,15 @@ pub trait Broker: Send + Sync {
     ) -> Result<Option<InternalBrokerMessage>, BroccoliError>;
 
     /// Attempts to consume up to a number of messages from the specified queue.
-    /// Does not block if not enough messages are available, and returns immmediately.
+    /// Does not block if not enough messages are available, and returns immediately.
     ///
     /// # Arguments
     /// * `queue_name` - The name of the queue.
+    /// * `batch_size` - Maxium number of messages to try to consume.
     ///
     /// # Returns
-    /// A `Result` containing an `Some(String)` with the message if available or `None`
-    /// if no message is avaiable, and a `BroccoliError` on failure.
+    /// A `Result` containing an `Vec(String)` with the available message(s)
+    /// and a `BroccoliError` on failure.
     async fn try_consume_batch(
         &self,
         queue_name: &str,
