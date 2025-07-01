@@ -637,7 +637,7 @@ async fn test_message_cancellation() {
             return;
         }
         Err(e) => {
-            panic!("Failed to get message position: {:?}", e);
+            panic!("Failed to get message position: {e:?}");
         }
     };
 
@@ -839,7 +839,7 @@ async fn success_handler(m: TestMessage) -> Result<(), BroccoliError> {
 
 async fn error_handler(_: TestMessage, err: BroccoliError) -> Result<(), BroccoliError> {
     // helper function to test process_messages_with_handlers
-    panic!("Should not invoke the error handler in testing {}", err);
+    panic!("Should not invoke the error handler in testing {err}");
 }
 
 #[tokio::test]
@@ -867,7 +867,7 @@ async fn test_process_messages() {
     let messages: Vec<_> = (0..10)
         .map(|i| TestMessage {
             id: i.to_string(),
-            content: format!("content test_process_messages {}", i),
+            content: format!("content test_process_messages {i}"),
         })
         .collect();
     let published = producer_queue
@@ -927,7 +927,7 @@ async fn test_process_messages_with_handlers() {
     let messages: Vec<_> = (0..10)
         .map(|i| TestMessage {
             id: i.to_string(),
-            content: format!("content test_process_messages_with_handlers_topic {}", i),
+            content: format!("content test_process_messages_with_handlers_topic {i}"),
         })
         .collect();
     let published = producer_queue

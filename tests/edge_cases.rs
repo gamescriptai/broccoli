@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use broccoli_queue::error::BroccoliError;
 use broccoli_queue::queue::ConsumeOptions;
-use broccoli_queue::queue::{ConsumeOptionsBuilder, PublishOptions};
+use broccoli_queue::queue::PublishOptions;
 #[cfg(feature = "redis")]
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
@@ -140,7 +140,7 @@ async fn test_concurrent_consume() {
     let messages: Vec<_> = (0..10)
         .map(|i| TestMessage {
             id: i.to_string(),
-            content: format!("content {}", i),
+            content: format!("content {i}"),
         })
         .collect();
 
@@ -470,7 +470,7 @@ async fn test_multiple_batch_publish_and_consume() {
                 break;
             }
         }
-        assert_eq!(2, consumed.len(), "missed read in iteration {}", i);
+        assert_eq!(2, consumed.len(), "missed read in iteration {i}");
         assert_eq!(published.len(), consumed.len());
         assert!(
             (published[0] == consumed[0] && published[1] == consumed[1])

@@ -27,7 +27,7 @@ async fn process_job(job: JobPayload) -> Result<(), BroccoliError> {
 }
 
 async fn success_handler(msg: JobPayload) -> Result<(), BroccoliError> {
-    println!("Successfully processed message: {:?}", msg);
+    println!("Successfully processed message: {msg:?}");
     Ok(())
 }
 

@@ -186,7 +186,7 @@ impl InternalSurrealDBBrokerMessage {
         let id: RecordId = message_record_id(queue_name, &msg.task_id)?;
         let uuid = match surrealdb::sql::Uuid::from_str(&msg.task_id) {
             Ok(uuid) => Ok(uuid),
-            Err(_) => Err(BroccoliError::Broker(format!(
+            Err(()) => Err(BroccoliError::Broker(format!(
                 "Incorrect uuid {}",
                 &msg.task_id
             ))),
@@ -209,7 +209,7 @@ impl InternalSurrealDBBrokerMessage {
 
 /// this table holds a timesorted timeseries, `<queue_name>`:[<priority>,<timestamp>,u<taskid>]
 /// and acts as the queue
-pub fn queue_table(queue_name: &str) -> String {
+#[must_use] pub fn queue_table(queue_name: &str) -> String {
     format!("{queue_name}___queue")
 }
 
@@ -230,7 +230,7 @@ fn failed_table(queue_name: &str) -> String {
 }
 
 
-/// queue_name + task id : namely `queue_name:<uuid>task_id`
+/// `queue_name` + task id : namely `queue_name:<uuid>task_id`
 fn message_record_id(queue_name: &str, task_id: &str) -> Result<RecordId, BroccoliError> {
     match surrealdb::sql::Uuid::from_str(task_id) {
         Ok(uuid) => {
@@ -239,7 +239,7 @@ fn message_record_id(queue_name: &str, task_id: &str) -> Result<RecordId, Brocco
             let record_id = RecordId::from_inner(message_id);
             Ok(record_id)
         }
-        Err(_) => Err(BroccoliError::Broker(format!(
+        Err(()) => Err(BroccoliError::Broker(format!(
             "{} is not a valid uuid",
             &task_id
         ))),
@@ -270,7 +270,7 @@ fn queue_record_id(
 fn index_record_id(task_id: &str, queue_name: &str) -> Result<RecordId, BroccoliError> {
     let index_table = self::index_table(queue_name);
     let uuid = surrealdb::sql::Uuid::from_str(task_id)
-        .map_err(|_| BroccoliError::Broker(format!("{} is not a uuid", task_id)))?;
+        .map_err(|()| BroccoliError::Broker(format!("{task_id} is not a uuid")))?;
     let uuid_val: surrealdb::sql::Value = uuid.into();
     let queue_name_val = surrealdb::sql::Value::from(queue_name);
     let vec_id: surrealdb::sql::Id = vec![uuid_val, queue_name_val].into();
@@ -307,7 +307,7 @@ pub async fn add_to_queue_delayed(
     let ns = delay.subsec_nanoseconds();
     let ns: u32 = ns.try_into().unwrap_or(0);
     let delay = chrono::TimeDelta::new(secs, ns).unwrap_or_default();
-    let when = now.checked_add_signed(delay).unwrap_or_else(|| now);
+    let when = now.checked_add_signed(delay).unwrap_or(now);
     let when: surrealdb::sql::Datetime = when.into();
     self::add_to_queue_scheduled(db, queue_name, task_id, priority, when, err_msg).await
 }
@@ -335,7 +335,7 @@ async fn add_record_to_queue(
 ) -> Result<(), BroccoliError> {
     let uuid = match surrealdb::sql::Uuid::from_str(task_id) {
         Ok(uuid) => Ok(uuid),
-        Err(_) => Err(BroccoliError::Broker(format!("{} is not a uuid", &task_id))),
+        Err(()) => Err(BroccoliError::Broker(format!("{} is not a uuid", &task_id))),
     }?;
     let queue_record_id = queue_record_id(queue_name, priority, when, *uuid);
     let message_record_id = message_record_id(queue_name, task_id)?;
@@ -422,8 +422,8 @@ async fn remove_from_queue_index(
 ) -> Result<InternalSurrealDBBrokerQueueIndex, BroccoliError> {
     // we build {index_table}:[<uuid>'{task_id}','{queue_name}']
     let index_table = self::index_table(queue_name);
-    let uuid = surrealdb::sql::Uuid::from_str(&task_id)
-        .map_err(|_| BroccoliError::Broker(format!("{} is not a uuid", &task_id)))?;
+    let uuid = surrealdb::sql::Uuid::from_str(task_id)
+        .map_err(|()| BroccoliError::Broker(format!("{} is not a uuid", &task_id)))?;
     let task_id_uuid_sql_val: surrealdb::sql::Value = uuid.into();
     let queue_name_val: surrealdb::sql::Value = queue_name.into();
     let vec_id: surrealdb::sql::Id = vec![task_id_uuid_sql_val, queue_name_val].into();
@@ -457,7 +457,7 @@ pub async fn get_queued_transaction(
     let mut retryable = RetriableSurrealDBResult::new(format!("{err_msg}:'{queue_name}': transaction consume"));
     while !retryable.is_done() {
         let transaction = get_queued_transaction_impl(
-             &db,
+             db,
             queue_name,
             auto_ack,
             batch_size,
@@ -701,7 +701,7 @@ pub(crate) async fn remove_from_queue_add_to_processed_transaction(
     let mut retryable = RetriableSurrealDBResult::new(format!("{err_msg}:'{queue_name}': consume transaction"));
     while !retryable.is_done() {
         let transaction = remove_from_queue_add_to_processed_transaction_impl(
-             &db,
+             db,
             queue_name,
             queued_message.clone(),
             "{err_msg}:'{queue_name}' consume transaction (removing from queue and adding to processed)",
@@ -773,8 +773,7 @@ pub async fn add_message(
                     None
                 } else {
                     Some(Err(BroccoliError::Broker(format!(
-                        "{err_msg}: adding message: {}",
-                        e
+                        "{err_msg}: adding message: {e}"
                     ))))
                 }
             }
@@ -804,7 +803,7 @@ pub async fn update_message(
     err_msg: &'static str,
 ) -> Result<(), BroccoliError> {
     let message_record_id = message_record_id(queue_name, &msg.task_id)?;
-    let message = InternalSurrealDBBrokerMessage::from(queue_name, msg.to_owned())?;
+    let message = InternalSurrealDBBrokerMessage::from(queue_name, msg.clone())?;
     let updated: Option<InternalSurrealDBBrokerMessage> = db
         .update(message_record_id)
         .content(message)
@@ -887,9 +886,9 @@ pub(crate) async fn remove_from_processing(
     err_msg: &'static str,
 ) -> Result<InternalSurrealDBBrokerMessageEntry, BroccoliError> {
     let processing_table = self::processing_table(queue_name);
-    let uuid = match surrealdb::sql::Uuid::from_str(&message_id) {
+    let uuid = match surrealdb::sql::Uuid::from_str(message_id) {
             Ok(uuid) => Ok(uuid),
-            Err(_) => Err(BroccoliError::Broker(format!(
+            Err(()) => Err(BroccoliError::Broker(format!(
                 "Incorrect uuid {}",
                 &message_id
             ))),
@@ -1043,12 +1042,12 @@ pub(crate) struct RetriableSurrealDBResult<T> {
 impl<T> RetriableSurrealDBResult<T> {
     
     // create a new retriable result with this error message prefix
-    fn new(prefix: String) -> Self{
-        RetriableSurrealDBResult{ retries: 0, status: None, max: 10, prefix } 
+    const fn new(prefix: String) -> Self{
+        Self{ retries: 0, status: None, max: 10, prefix } 
     }
 
     // we either have a result or we have exhausted the number of retries
-    fn is_done(&self) -> bool {
+    const fn is_done(&self) -> bool {
         self.status.is_some() || self.retries >= self.max
     }
 
@@ -1060,14 +1059,14 @@ impl<T> RetriableSurrealDBResult<T> {
             Ok(r) => 
                 self.status = Some(Ok(r)),
             Err(e) => if format!("{}", &e).contains("This transaction can be retried") {
-                    tokio::time::sleep(tokio::time::Duration::from_millis(self.retries as u64)).await;
+                    tokio::time::sleep(tokio::time::Duration::from_millis(u64::from(self.retries))).await;
                     self.retries += 1;
                 } else {
                     self.status = Some(Err(BroccoliError::Broker(format!(
                         "{}: {}",
                         self.prefix,
                         e,
-                    ))))
+                    ))));
                 }
         }
         self

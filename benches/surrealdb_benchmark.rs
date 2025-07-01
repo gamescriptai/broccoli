@@ -88,7 +88,7 @@ fn target_counter(message_count: usize) -> usize {
 async fn generate_test_messages(queue_name: &str, n: usize) -> Vec<BenchmarkMessage> {
     let messages: Vec<BenchmarkMessage> = (0..n)
         .map(|i| BenchmarkMessage {
-            id: RecordId::from_str(&format!("{}:{}", queue_name, i)).unwrap(),
+            id: RecordId::from_str(&format!("{queue_name}:{i}")).unwrap(),
             data: format!("test data {}{}", i, if i == n - 1 { " [last]" } else { "" }),
             timestamp: time::OffsetDateTime::now_utc().unix_timestamp(),
         })
@@ -139,9 +139,9 @@ where
 async fn benchmark_raw_surrealdb_throughput(db: &Surreal<Any>, message_count: usize) -> (f64, f64) {
     let queue_name = "bench_raw_surrealdb";
 
-    let index_table = format!("{}___index", queue_name);
-    let queue_table = format!("{}___queue", queue_name);
-    let processing_table = format!("{}___processing", queue_name);
+    let index_table = format!("{queue_name}___index");
+    let queue_table = format!("{queue_name}___queue");
+    let processing_table = format!("{queue_name}___processing");
 
     // Generate test messages
     let messages = generate_test_messages(queue_name, message_count).await;
@@ -224,7 +224,7 @@ async fn benchmark_raw_surrealdb_throughput(db: &Surreal<Any>, message_count: us
         // deserialize payload
         let queued: Option<BenchmarkMessage> = match queued.check() {
             Ok(mut queued) => queued.take(queued.num_statements() - 1).unwrap(),
-            Err(e) => panic!("Could not do the raw transaction {:?}", e),
+            Err(e) => panic!("Could not do the raw transaction {e:?}"),
         };
         let queued = match queued {
             Some(queued) => queued,
@@ -239,14 +239,14 @@ async fn benchmark_raw_surrealdb_throughput(db: &Surreal<Any>, message_count: us
         let message_id = message_id.replace("]", "");
         let message_id = message_id.trim();
         let message_record_id =
-            RecordId::from_str(&format!("{}:{}", processing_table, message_id)).unwrap();
+            RecordId::from_str(&format!("{processing_table}:{message_id}")).unwrap();
 
         let processing: Option<BenchmarkMessageEntry> = db.delete(message_record_id).await.unwrap();
         processing.unwrap();
 
         // ack: remove payload
         let payload_record_id =
-            RecordId::from_str(&format!("{}:{}", queue_name, message_id)).unwrap();
+            RecordId::from_str(&format!("{queue_name}:{message_id}")).unwrap();
         let removed: Option<BenchmarkMessage> = db.delete(payload_record_id).await.unwrap();
         removed.unwrap();
 
@@ -281,7 +281,7 @@ async fn benchmark_broccoli_batch_publish_consume_throughput(
         .expect("Could not publish");
     let n = published.len();
     if n != message_count {
-        panic!("Only published {}/{} messages", message_count, n);
+        panic!("Only published {message_count}/{n} messages");
     }
 
     // when using mem://, we have a race condition between end of publish and consume, we yield to the
@@ -291,7 +291,7 @@ async fn benchmark_broccoli_batch_publish_consume_throughput(
     let consumed = consume_loop(queue, queue_name, message_count).await;
     let n = consumed.len();
     if n != message_count {
-        panic!("Only consumed {}/{} messages", message_count, n);
+        panic!("Only consumed {message_count}/{n} messages");
     }
 
     let total_time = now.elapsed().as_secs_f64();
@@ -325,7 +325,7 @@ async fn benchmark_broccoli_consume_loop_throughput(
     //let consumed = consume_batch(queue, queue_name, 10, time::Duration::seconds(10)).await;
     let n = consumed.len();
     if n != message_count {
-        panic!("Only consumed {}/{} messages", message_count, n);
+        panic!("Only consumed {message_count}/{n} messages");
     }
 
     let total_time = now.elapsed().as_secs_f64();
@@ -420,7 +420,7 @@ async fn benchmark_broccoli_batch_handler_throughput(
         .expect("Could not publish");
     let n = published.len();
     if n != message_count {
-        panic!("Only published {}/{} messages", message_count, n);
+        panic!("Only published {message_count}/{n} messages");
     }
 
     // we wait for the consumer to finish
@@ -480,8 +480,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 };
                 group.bench_function(
                     format!(
-                        "Broccoli surrealdb batch_publish + consume loop {}{} - {}",
-                        instance, opt_str, count
+                        "Broccoli surrealdb batch_publish + consume loop {instance}{opt_str} - {count}"
                     ),
                     |b| {
                         b.iter(|| {
@@ -497,8 +496,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 );
                 group.bench_function(
                     format!(
-                        "Broccoli surrealdb consume loop {}{} - {}",
-                        instance, opt_str, count
+                        "Broccoli surrealdb consume loop {instance}{opt_str} - {count}"
                     ),
                     |b| {
                         b.iter(|| {

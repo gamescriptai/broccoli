@@ -194,7 +194,7 @@ impl Broker for SurrealDBBroker {
         )
         .await;
         match payload {
-            Ok(messages) => Ok(messages.first().map(|m| m.to_owned())),
+            Ok(messages) => Ok(messages.first().map(std::borrow::ToOwned::to_owned)),
             Err(e) => Err(e),
         }
     }
@@ -325,7 +325,7 @@ impl Broker for SurrealDBBroker {
                     None => {
                         log::trace!("Ignored live consume as another consumer took it");
                     }
-                };
+                }
             }
         } // while - next
 

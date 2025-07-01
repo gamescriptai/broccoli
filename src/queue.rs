@@ -130,7 +130,7 @@ impl BroccoliQueueBuilder {
     /// # Returns
     /// A new `BroccoliQueueBuilder` instance.
     #[cfg(feature = "surrealdb")]
-    pub fn new_with_surrealdb(db: surrealdb::Surreal<surrealdb::engine::any::Any>) -> Self {
+    #[must_use] pub fn new_with_surrealdb(db: surrealdb::Surreal<surrealdb::engine::any::Any>) -> Self {
         Self {
             broker_url: "ws://unused".to_string(),
             retry_attempts: None,
@@ -222,7 +222,7 @@ pub struct ConsumeOptions {
     /// how long to wait in tight consumer loops, defaults to zero for `process_messages` and `process_messages_with_handlers`,
     /// and 500ms for `consume`, which allows those functions to be stopped in a `tokkio::spawn` thread
     /// Unfortunately, since the options builder can be used in a constant setting, we cannot
-    /// add a CancellationToken as an option which would be great way to stop gracefully
+    /// add a `CancellationToken` as an option which would be great way to stop gracefully
     pub consume_wait: Option<std::time::Duration>,
 }
 
@@ -429,7 +429,7 @@ impl BroccoliQueue {
     ///
     /// # Returns
     /// A new `BroccoliQueueBuilder` instance.
-    pub fn builder_with(
+    #[must_use] pub fn builder_with(
         db: surrealdb::Surreal<surrealdb::engine::any::Any>,
     ) -> BroccoliQueueBuilder {
         BroccoliQueueBuilder::new_with_surrealdb(db)
@@ -775,9 +775,9 @@ impl BroccoliQueue {
                                 .await
                                 .map_err(|e| match e {
                                     BroccoliError::BrokerNonIdempotentOp(e) => {
-                                        log::error!("Failed to consume message due to concurrency issues: {:?}", e)
+                                        log::error!("Failed to consume message due to concurrency issues: {e:?}");
                                     }
-                                    _ => log::error!("Failed to consume message: {:?}", e),
+                                    _ => log::error!("Failed to consume message: {e:?}"),
                                 });
 
                             if let Ok(message) = message {
@@ -791,17 +791,16 @@ impl BroccoliQueue {
                                         let _ = broker.acknowledge(&topic, message).await.map_err(
                                             |e| {
                                                 log::error!(
-                                                    "Failed to acknowledge message: {:?}",
-                                                    e
+                                                    "Failed to acknowledge message: {e:?}"
                                                 );
                                             },
                                         );
                                     }
                                     Err(e) => {
-                                        log::error!("Failed to process message: {:?}", e);
+                                        log::error!("Failed to process message: {e:?}");
                                         // Message processing failed
                                         let _ = broker.reject(&topic, message).await.map_err(|e| {
-                                            log::error!("Failed to reject message: {:?}", e);
+                                            log::error!("Failed to reject message: {e:?}");
                                         });
                                     }
                                 }
@@ -820,7 +819,7 @@ impl BroccoliQueue {
                     .consume(topic, consume_options.clone())
                     .await
                     .map_err(|e| {
-                        log::error!("Failed to consume message: {:?}", e);
+                        log::error!("Failed to consume message: {e:?}");
                         BroccoliError::Consume(format!("Failed to consume message: {e:?}"))
                     })?;
 
@@ -828,14 +827,14 @@ impl BroccoliQueue {
                     Ok(()) => {
                         // Message processed successfully
                         let _ = self.broker.acknowledge(topic, message).await.map_err(|e| {
-                            log::error!("Failed to acknowledge message: {:?}", e);
+                            log::error!("Failed to acknowledge message: {e:?}");
                         });
                     }
                     Err(e) => {
-                        log::error!("Failed to process message: {:?}", e);
+                        log::error!("Failed to process message: {e:?}");
                         // Message processing failed
                         let _ = self.broker.reject(topic, message).await.map_err(|e| {
-                            log::error!("Failed to reject message: {:?}", e);
+                            log::error!("Failed to reject message: {e:?}");
                         });
                     }
                 }
@@ -954,7 +953,7 @@ impl BroccoliQueue {
                                 .consume(&topic, consume_options.clone())
                                 .await
                                 .map_err(|e| {
-                                    log::error!("Failed to consume message: {:?}", e);
+                                    log::error!("Failed to consume message: {e:?}");
                                 });
 
                             if let Ok(message) = message {
@@ -967,29 +966,26 @@ impl BroccoliQueue {
                                         let _ =
                                             on_success(broker_message, result).await.map_err(|e| {
                                                 log::error!(
-                                                    "Success Handler to process message: {:?}",
-                                                    e
+                                                    "Success Handler to process message: {e:?}"
                                                 );
                                             });
                                         let _ = broker.acknowledge(&topic, message).await.map_err(
                                             |e| {
                                                 log::error!(
-                                                    "Failed to acknowledge message: {:?}",
-                                                    e
+                                                    "Failed to acknowledge message: {e:?}"
                                                 );
                                             },
                                         );
                                     }
                                     Err(e) => {
-                                        log::error!("Failed to process message: {:?}", e);
+                                        log::error!("Failed to process message: {e:?}");
                                         let _ = on_error(broker_message, e).await.map_err(|e| {
                                             log::error!(
-                                                "Error Handler to process message: {:?}",
-                                                e
+                                                "Error Handler to process message: {e:?}"
                                             );
                                         });
                                         let _ = broker.reject(&topic, message).await.map_err(|e| {
-                                            log::error!("Failed to reject message: {:?}", e);
+                                            log::error!("Failed to reject message: {e:?}");
                                         });
                                     }
                                 }
@@ -1008,7 +1004,7 @@ impl BroccoliQueue {
                     .consume(topic, consume_options.clone())
                     .await
                     .map_err(|e| {
-                        log::error!("Failed to consume message: {:?}", e);
+                        log::error!("Failed to consume message: {e:?}");
                         BroccoliError::Consume(format!("Failed to consume message: {e:?}"))
                     })?;
 
@@ -1017,24 +1013,24 @@ impl BroccoliQueue {
                         let _ = on_success(message.into_message()?, result)
                             .await
                             .map_err(|e| {
-                                log::error!("Success Handler to process message: {:?}", e);
+                                log::error!("Success Handler to process message: {e:?}");
                             });
                         let _ = self
                             .broker
                             .acknowledge(topic, message)
                             .await
-                            .map_err(|e| log::error!("Failed to acknowledge message: {:?}", e));
+                            .map_err(|e| log::error!("Failed to acknowledge message: {e:?}"));
                     }
                     Err(e) => {
-                        log::error!("Failed to process message: {:?}", e);
+                        log::error!("Failed to process message: {e:?}");
                         let _ = on_error(message.into_message()?, e)
                             .await
-                            .map_err(|e| log::error!("Error Handler to process message: {:?}", e));
+                            .map_err(|e| log::error!("Error Handler to process message: {e:?}"));
                         let _ = self
                             .broker
                             .reject(topic, message)
                             .await
-                            .map_err(|e| log::error!("Failed to reject message: {:?}", e));
+                            .map_err(|e| log::error!("Failed to reject message: {e:?}"));
                     }
                 }
             }
