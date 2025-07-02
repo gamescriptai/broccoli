@@ -97,8 +97,6 @@ pub enum BroccoliError {
     SurrealDB(#[from] surrealdb::Error),
 
     /// Represents errors that occur during job processing.
-    ///
-    /// This variant can wrap any error that implements the Error trait and is Send + Sync.
     #[error("Job error: {0}")]
     Job(String),
 
