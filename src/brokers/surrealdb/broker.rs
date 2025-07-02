@@ -369,7 +369,7 @@ impl Broker for SurrealDBBroker {
     ) -> Result<(), BroccoliError> {
         let db = self.check_connected()?;
 
-        let attempts = message.attempts + 1;
+        let attempts = message.attempts.saturating_add(1); // safe increment
 
         //// 1: remove from processing ////
         let rejected = utils::remove_from_processing(

@@ -130,7 +130,8 @@ impl BroccoliQueueBuilder {
     /// # Returns
     /// A new `BroccoliQueueBuilder` instance.
     #[cfg(feature = "surrealdb")]
-    #[must_use] pub fn new_with_surrealdb(db: surrealdb::Surreal<surrealdb::engine::any::Any>) -> Self {
+    #[must_use]
+    pub fn new_with_surrealdb(db: surrealdb::Surreal<surrealdb::engine::any::Any>) -> Self {
         Self {
             broker_url: "ws://unused".to_string(),
             retry_attempts: None,
@@ -219,11 +220,12 @@ pub struct ConsumeOptions {
     pub auto_ack: Option<bool>,
     /// Whether to consume from a fairness queue or not. This is only supported by the Redis Broker.
     pub fairness: Option<bool>,
-    /// how long to wait in tight consumer loops, defaults to zero for `process_messages` and `process_messages_with_handlers`,
-    /// and 500ms for `consume`, which allows those functions to be stopped in a `tokkio::spawn` thread
-    /// Unfortunately, since the options builder can be used in a constant setting, we cannot
-    /// add a `CancellationToken` as an option which would be great way to stop gracefully
+    /// How long to wait in tight consumer loops, which allows those functions to be stopped in a `tokio::spawn` thread
+    /// Defaults to zero to lower performance impact
     pub consume_wait: Option<std::time::Duration>,
+    /// After a handler is executed, acknowledge / reject is executed accordingly, set this to false to skip that and leave the queue untouched after a handler runs delegating
+    /// acknowledge/reject to some other actor (Example use-cases: handlers spawn a long running task and return immediately or independent reaper processes handle the follow-up).
+    pub handler_followup: Option<bool>,
 }
 
 impl Default for ConsumeOptions {
@@ -232,6 +234,7 @@ impl Default for ConsumeOptions {
             auto_ack: Some(false),
             fairness: None,
             consume_wait: None,
+            handler_followup: Some(true),
         }
     }
 }
@@ -250,6 +253,7 @@ pub struct ConsumeOptionsBuilder {
     auto_ack: Option<bool>,
     fairness: Option<bool>,
     consume_wait: Option<std::time::Duration>,
+    handler_followup: Option<bool>,
 }
 
 impl ConsumeOptionsBuilder {
@@ -260,6 +264,7 @@ impl ConsumeOptionsBuilder {
             auto_ack: None,
             fairness: None,
             consume_wait: None,
+            handler_followup: None,
         }
     }
 
@@ -284,6 +289,13 @@ impl ConsumeOptionsBuilder {
         self
     }
 
+    /// Set to false if don't want to run acknowledge/reject after handler execution
+    #[must_use]
+    pub const fn handler_followup(mut self, followup: bool) -> Self {
+        self.handler_followup = Some(followup);
+        self
+    }
+
     /// Builds the `ConsumeOptions` with the configured values.
     #[must_use]
     pub const fn build(self) -> ConsumeOptions {
@@ -291,6 +303,7 @@ impl ConsumeOptionsBuilder {
             auto_ack: self.auto_ack,
             fairness: self.fairness,
             consume_wait: self.consume_wait,
+            handler_followup: self.handler_followup,
         }
     }
 }
@@ -429,7 +442,8 @@ impl BroccoliQueue {
     ///
     /// # Returns
     /// A new `BroccoliQueueBuilder` instance.
-    #[must_use] pub fn builder_with(
+    #[must_use]
+    pub fn builder_with(
         db: surrealdb::Surreal<surrealdb::engine::any::Any>,
     ) -> BroccoliQueueBuilder {
         BroccoliQueueBuilder::new_with_surrealdb(db)
@@ -766,6 +780,11 @@ impl BroccoliQueue {
                     let topic = topic.to_string();
                     let handler = handler.clone();
                     let consume_options = consume_options.clone();
+                    let handler_followup = consume_options
+                        .clone()
+                        .unwrap_or_default()
+                        .handler_followup
+                        .unwrap_or(true);
 
                     let handle = tokio::spawn(async move {
                         loop {
@@ -788,20 +807,26 @@ impl BroccoliQueue {
                                 match handler(broker_message).await {
                                     Ok(()) => {
                                         // Message processed successfully
-                                        let _ = broker.acknowledge(&topic, message).await.map_err(
-                                            |e| {
-                                                log::error!(
-                                                    "Failed to acknowledge message: {e:?}"
-                                                );
-                                            },
-                                        );
+                                        if handler_followup {
+                                            let _ = broker
+                                                .acknowledge(&topic, message)
+                                                .await
+                                                .map_err(|e| {
+                                                    log::error!(
+                                                        "Failed to acknowledge message: {e:?}"
+                                                    );
+                                                });
+                                        }
                                     }
                                     Err(e) => {
                                         log::error!("Failed to process message: {e:?}");
                                         // Message processing failed
-                                        let _ = broker.reject(&topic, message).await.map_err(|e| {
-                                            log::error!("Failed to reject message: {e:?}");
-                                        });
+                                        if handler_followup {
+                                            let _ =
+                                                broker.reject(&topic, message).await.map_err(|e| {
+                                                    log::error!("Failed to reject message: {e:?}");
+                                                });
+                                        }
                                     }
                                 }
                             } else {
@@ -930,11 +955,11 @@ impl BroccoliQueue {
         let consume_options = consume_options.clone();
         // tokio can't abort CPU bound loops, by calling the sleep await, we allow tokio to abort
         // the running thread, even if the sleep is set to zero
-        let sleep = consume_options
-            .clone()
-            .unwrap_or_default()
+        let consume_options_clone = consume_options.clone().unwrap_or_default();
+        let sleep = consume_options_clone
             .consume_wait
             .unwrap_or(std::time::Duration::ZERO);
+        let handler_followup = consume_options_clone.handler_followup.unwrap_or(true);
         loop {
             tokio::time::sleep(sleep).await;
             if let Some(concurrency) = concurrency {
@@ -969,24 +994,28 @@ impl BroccoliQueue {
                                                     "Success Handler to process message: {e:?}"
                                                 );
                                             });
-                                        let _ = broker.acknowledge(&topic, message).await.map_err(
-                                            |e| {
-                                                log::error!(
-                                                    "Failed to acknowledge message: {e:?}"
-                                                );
-                                            },
-                                        );
+                                        if handler_followup {
+                                            let _ = broker
+                                                .acknowledge(&topic, message)
+                                                .await
+                                                .map_err(|e| {
+                                                    log::error!(
+                                                        "Failed to acknowledge message: {e:?}"
+                                                    );
+                                                });
+                                        }
                                     }
                                     Err(e) => {
                                         log::error!("Failed to process message: {e:?}");
                                         let _ = on_error(broker_message, e).await.map_err(|e| {
-                                            log::error!(
-                                                "Error Handler to process message: {e:?}"
-                                            );
+                                            log::error!("Error Handler to process message: {e:?}");
                                         });
-                                        let _ = broker.reject(&topic, message).await.map_err(|e| {
-                                            log::error!("Failed to reject message: {e:?}");
-                                        });
+                                        if handler_followup {
+                                            let _ =
+                                                broker.reject(&topic, message).await.map_err(|e| {
+                                                    log::error!("Failed to reject message: {e:?}");
+                                                });
+                                        }
                                     }
                                 }
                             } else {
