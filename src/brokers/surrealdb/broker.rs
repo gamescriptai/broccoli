@@ -302,9 +302,6 @@ impl Broker for SurrealDBBroker {
                                 "Could not consume (removing from queue transaction)",
                             )
                             .await?;
-                            // *_lock -= 1;
-                            // let _lock: Option<u8> = None;
-                            // // // // CRITICAL AREA ENDS // // // //
                             Ok(removed)
                         }
                     }
