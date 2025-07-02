@@ -1040,7 +1040,7 @@ impl BroccoliQueue {
                         if handler_ack {
                             let _ =
                                 self.broker.acknowledge(topic, message).await.map_err(|e| {
-                                    log::error!("Failed to acknowledge message: {e:?}")
+                                    log::error!("Failed to acknowledge message: {e:?}");
                                 });
                         }
                     }
