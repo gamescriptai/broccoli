@@ -924,15 +924,22 @@ pub(crate) async fn remove_message_and_from_processing_transaction(
             -- see https://github.com/surrealdb/surrealdb/issues/6104 for context on the weird conversions
             -- delete payload
             LET $message_id = type::record($queue_name+':u\\''+$task_id+'\\'');
-            DELETE ONLY $message_id RETURN BEFORE;
+            LET $m = DELETE $message_id RETURN BEFORE;
+            IF !$m {
+                THROW 'Transaction failed removing payload '+<string>$message_id+ ' (CONCURRENT_READ)';
+            };
+
             -- remove from index
             LET $index_id = type::thing($index_table, [<uuid>$task_id, $queue_name]);
-            DELETE ONLY $index_id RETURN BEFORE;
+            LET $idx = DELETE $index_id RETURN BEFORE;
+            IF !$idx {
+                THROW 'Transaction failed removing index '+<string>$index_id+' (CONCURRENT_READ)';
+            };
             -- remove from processing
             LET $processing_id = type::record($processing_table+':u\\''+$task_id+'\\'');
             LET $p = DELETE ONLY $processing_id RETURN BEFORE;
             IF !$p {
-                THROW 'Transaction failed removing from processing, '+<string>$processing_id+' (CONCURRENT_READ)';
+                THROW 'Transaction failed removing from processing '+<string>$processing_id+' (CONCURRENT_READ)';
             };
             $p
         };
