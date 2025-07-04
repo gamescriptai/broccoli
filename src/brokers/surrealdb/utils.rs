@@ -324,7 +324,9 @@ pub async fn add_to_queue_scheduled(
     self::add_record_to_queue(db, queue_name, task_id, priority, when, err_msg).await
 }
 
-// internal implementation to add the record to the timeseries queue
+// internal implementation to add the record to the timeseries queue + index
+// 1) we add the index first
+// 2) we add the queue entry last, as that is what consumers see
 async fn add_record_to_queue(
     db: &Surreal<Any>,
     queue_name: &str,
@@ -338,6 +340,8 @@ async fn add_record_to_queue(
         Err(()) => Err(BroccoliError::Broker(format!("{} is not a uuid", &task_id))),
     }?;
     let queue_record_id = queue_record_id(queue_name, priority, when, *uuid);
+    let _ =  self::add_to_queue_index(db, queue_name, task_id, queue_record_id.clone(), err_msg).await?;
+    
     let message_record_id = message_record_id(queue_name, task_id)?;
     let msg = InternalSurrealDBBrokerMessageEntry {
         id: queue_record_id.clone(),
@@ -347,19 +351,14 @@ async fn add_record_to_queue(
     let mut retryable = RetriableSurrealDBResult::new(format!("{err_msg}:'{queue_name}': adding to queue"));
     while !retryable.is_done() {
         let result: Result<Option<InternalSurrealDBBrokerMessageEntry>, surrealdb::Error> = db
-            .create(queue_record_id.clone())
+            .create(&queue_record_id)
             .content(msg.clone())
             .await;
         retryable = retryable.step(result).await;
     }
     let qm =retryable.wrapup()?;
     match qm {
-        Some(_) => {
-            // now we insert into the index and we are done, note we insert the queue id
-            let () =
-                self::add_to_queue_index(db, queue_name, task_id, queue_record_id, err_msg).await?;
-            Ok(())
-        }
+        Some(_) =>Ok(()),
         None => Err(BroccoliError::Broker(format!(
             "{err_msg}:'{queue_name}': adding to queue (silently did not add)",
         ))),
@@ -510,7 +509,7 @@ pub(crate) async fn get_queued_transaction_impl(
                 LET $payloads = array::fold($msgs, {out_: [], t_: $processing_table}, |$acc, $e|  {
                     -- remove from queue and return payload
                     -- remember we don't delete from index, instead acknowledge/reject/cancel will do it
-                    LET $deleted = DELETE $e.id RETURN BEFORE;
+                    LET $deleted = DELETE ONLY $e.id RETURN BEFORE;
                     IF !$deleted {
                         -- if it was not deleted we will not abort the transaction, we just won't return the payload
                         RETURN $acc;
@@ -627,7 +626,7 @@ async fn remove_from_queue_add_to_processed_transaction_impl(
                 -- if message is still in the queue, remove it and return payload
                 -- otherwise we explicitly abort the transaction
                 -- (remember we don't delete from index, instead acknowledge/reject/cancel will do it)
-                LET $m = DELETE $queued_message_id RETURN BEFORE;
+                LET $m = DELETE ONLY $queued_message_id RETURN BEFORE;
                 IF !$m {
                     THROW 'Transaction failed removing from queue, '+<string>$queued_message_id+' already deleted (CONCURRENT_READ)';
                 };
@@ -925,21 +924,15 @@ pub(crate) async fn remove_message_and_from_processing_transaction(
             -- see https://github.com/surrealdb/surrealdb/issues/6104 for context on the weird conversions
             -- delete payload
             LET $message_id = type::record($queue_name+':u\\''+$task_id+'\\'');
-            LET $m = DELETE $message_id RETURN BEFORE;
-            IF !$m {
-                THROW 'Transaction failed removing payload, '+<string>$message_id+ ' already deleted (CONCURRENT_READ)';
-            };
+            DELETE ONLY $message_id RETURN BEFORE;
             -- remove from index
             LET $index_id = type::thing($index_table, [<uuid>$task_id, $queue_name]);
-            LET $idx = DELETE $index_id RETURN BEFORE;
-            IF !$idx {
-                THROW 'Transaction failed removing index, '+<string>$index_id+' already deleted (CONCURRENT_READ)';
-            };
+            DELETE ONLY $index_id RETURN BEFORE;
             -- remove from processing
             LET $processing_id = type::record($processing_table+':u\\''+$task_id+'\\'');
-            LET $p = DELETE $processing_id RETURN BEFORE;
+            LET $p = DELETE ONLY $processing_id RETURN BEFORE;
             IF !$p {
-                THROW 'Transaction failed removing from processing, '+<string>$processing_id+' already deleted (CONCURRENT_READ)';
+                THROW 'Transaction failed removing from processing, '+<string>$processing_id+' (CONCURRENT_READ)';
             };
             $p
         };
