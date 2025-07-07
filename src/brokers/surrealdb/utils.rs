@@ -522,7 +522,8 @@ pub(crate) async fn get_queued_transaction_impl(
                         RETURN $acc;
                     };
                     IF !$auto_ack {
-                        CREATE type::table($acc.t_) CONTENT {
+                        -- upserting will be more robust and not freeze the queue if there is a duplicate
+                        UPSERT type::table($acc.t_) CONTENT {
                             // loses the uuid, see https://github.com/surrealdb/surrealdb/issues/6104
                             //id: type::thing($acc.t_, $e.id[2]), // id[2] is the uuid
                             // we forcefully add it
@@ -623,7 +624,8 @@ async fn remove_from_queue_add_to_processed_transaction_impl(
                 // type::thing($processing_table, record::id($message_id)),
                 // we forcefully set it
                 LET $processing_id = type::record($processing_table+':u\\''+<string>record::id($message_id)+'\\'');
-                LET $c = CREATE type::table($processing_table) CONTENT {
+                -- upserting will be more robust and not freeze the queue if there is a duplicate
+                LET $c = UPSERT type::table($processing_table) CONTENT {
                     id: $processing_id,                            
                     message_id: $message_id,
                     priority: $priority,

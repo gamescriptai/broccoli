@@ -195,7 +195,8 @@ async fn benchmark_raw_surrealdb_throughput(db: &Surreal<Any>, message_count: us
                 IF !$m {
                     RETURN NONE // no data available
                 };
-                CREATE type::table($processing_table) CONTENT {
+                -- upserting will be more robust and not freeze the queue if there is a duplicate
+                UPSERT type::table($processing_table) CONTENT {
                     // loses the uuid, see https://github.com/surrealdb/surrealdb/issues/6104
                     //id: type::thing($acc.t_, $e.id[2]), // id[2] is the uuid
                     // we forcefully add it
@@ -245,8 +246,7 @@ async fn benchmark_raw_surrealdb_throughput(db: &Surreal<Any>, message_count: us
         processing.unwrap();
 
         // ack: remove payload
-        let payload_record_id =
-            RecordId::from_str(&format!("{queue_name}:{message_id}")).unwrap();
+        let payload_record_id = RecordId::from_str(&format!("{queue_name}:{message_id}")).unwrap();
         let removed: Option<BenchmarkMessage> = db.delete(payload_record_id).await.unwrap();
         removed.unwrap();
 
@@ -495,9 +495,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     },
                 );
                 group.bench_function(
-                    format!(
-                        "Broccoli surrealdb consume loop {instance}{opt_str} - {count}"
-                    ),
+                    format!("Broccoli surrealdb consume loop {instance}{opt_str} - {count}"),
                     |b| {
                         b.iter(|| {
                             rt.block_on(async {
