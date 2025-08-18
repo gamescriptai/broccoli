@@ -99,7 +99,7 @@ async fn test_publish_and_consume() {
             .await
             .expect("Failed to acknowledge message");
 
-        let processing_table_name = format!("{}___processing", test_topic);
+        let processing_table_name = format!("{test_topic}___processing");
         let st = "(SELECT COUNT() FROM type::table($processing) WHERE message_id=$id).count==1";
         let mut resp = sdb
             .query(st)

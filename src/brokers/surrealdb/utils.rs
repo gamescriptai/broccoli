@@ -345,7 +345,7 @@ async fn add_record_to_queue(
         Err(()) => Err(BroccoliError::Broker(format!("{} is not a uuid", &task_id))),
     }?;
     let queue_record_id = queue_record_id(queue_name, priority, when, *uuid);
-    let _ =  self::add_to_queue_index(db, queue_name, task_id, queue_record_id.clone(), ts, err_msg).await?;
+    let () =  self::add_to_queue_index(db, queue_name, task_id, queue_record_id.clone(), ts, err_msg).await?;
     
     let message_record_id = message_record_id(queue_name, task_id)?;
     let msg = InternalSurrealDBBrokerMessageEntry {
