@@ -4500,9 +4500,8 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "surrealdb"
-version = "2.3.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae751a9a5479b27b5bd5b5786dcfa740115f395db118bc17007315065befc23c"
+version = "2.3.7"
+source = "git+https://github.com/gamescriptai/surrealdb/?rev=108335bc04e15a73c9c20226d36b9ed616e13d9c#108335bc04e15a73c9c20226d36b9ed616e13d9c"
 dependencies = [
  "arrayvec",
  "async-channel",
@@ -4526,6 +4525,7 @@ dependencies = [
  "serde",
  "serde-content",
  "serde_json",
+ "socket2 0.5.10",
  "surrealdb-core",
  "thiserror 1.0.69",
  "tokio",
@@ -4542,9 +4542,8 @@ dependencies = [
 
 [[package]]
 name = "surrealdb-core"
-version = "2.3.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "daf5dd17aad816bc32a85d724ce35cefeea2d85f6e669fa2f2ee7c60c514e7db"
+version = "2.3.7"
+source = "git+https://github.com/gamescriptai/surrealdb/?rev=108335bc04e15a73c9c20226d36b9ed616e13d9c#108335bc04e15a73c9c20226d36b9ed616e13d9c"
 dependencies = [
  "addr",
  "affinitypool",
