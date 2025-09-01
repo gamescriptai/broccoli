@@ -410,7 +410,7 @@ async fn test_message_retry() {
 
     // Publish message
     #[cfg(not(feature = "test-fairness"))]
-    let published = queue
+    let _ = queue
         .publish(test_topic, None, &message, None)
         .await
         .expect("Failed to publish message");
