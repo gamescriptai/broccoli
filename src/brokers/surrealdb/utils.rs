@@ -491,50 +491,55 @@ pub(crate) async fn get_queued_transaction_impl(
 ) -> Result<Vec<InternalBrokerMessage>, BroccoliError> {
     let queue_table = self::queue_table(queue_name);
     let processing_table = self::processing_table(queue_name);
-    let q = r"
-            BEGIN TRANSACTION;
-            {
-                -- first of all, we  extract messages up to the batch size limit, in priority order
-                -- this implementation is only for surrealdb 2.1.0+
-                LET $msgs = [1,2,3,4,5].fold({out_: [], remaining_: $batch_size, t_: $queue_table}, |$acc, $p| { 
-                    IF $acc.remaining_>0 {
-                        LET $output = SELECT * FROM type::thing($acc.t_,type::range([[$p,None],[$p,time::now()]])) LIMIT $acc.remaining_;
-                        LET $size = IF type::is::none($output) {RETURN 0} ELSE {RETURN array::len($output)};
-                        IF $size>0 {
-                        RETURN {out_: array::concat($acc.out_, $output), remaining_: $acc.remaining_-$size, t_: $acc.t_};
-                        } ELSE {
-                            RETURN $acc;
-                        }
+    let q = r#"
+        BEGIN TRANSACTION;
+        {
+            -- first of all, we  extract messages up to the batch size limit, in priority order
+            -- this implementation is only for surrealdb 2.1.0+
+            LET $msgs = [1,2,3,4,5].fold({out_: [], remaining_: $batch_size, t_: $queue_table}, |$acc, $p| { 
+                IF $acc.remaining_>0 {
+                    LET $output = SELECT * FROM type::thing($acc.t_,type::range([[$p,None],[$p,time::now()]])) LIMIT $acc.remaining_;
+                    LET $size = IF type::is::none($output) {RETURN 0} ELSE {RETURN array::len($output)};
+                    IF $size>0 {
+                    RETURN {out_: array::concat($acc.out_, $output), remaining_: $acc.remaining_-$size, t_: $acc.t_};
                     } ELSE {
-                            RETURN $acc;
+                        RETURN $acc;
                     }
-                }).out_;
-                IF !type::is::array($msgs) OR array::is_empty($msgs) { -- nothing on the queue
-                    RETURN []
-                };
-                -- remove from the queue all in one go
-                -- remember we don't delete from index, instead acknowledge/reject/cancel will do it
-                DELETE FROM type::table($queue_table) WHERE id IN (SELECT VALUE id FROM $msgs);
-                -- next we iterate over the messages, create the in-process if needed
-                array::fold($msgs, {t_: $processing_table, auto_ack_:$auto_ack}, |$acc, $e|  {
-                    IF !$acc.auto_ack_ {
-                        -- upserting will be more robust and not freeze the queue if there is a duplicate
-                        UPSERT type::table($acc.t_) CONTENT {
-                            // loses the uuid, see https://github.com/surrealdb/surrealdb/issues/6104
-                            //id: type::thing($acc.t_, $e.id[2]), // id[2] is the uuid
-                            // we forcefully add it
-                            id: type::record($acc.t_+':u\''+<string>$e.id[2]+'\''), // id[2] is the uuid
-                            message_id: $e.message_id,
-                            priority: $e.priority,
-                            timestamp: time::now()
-                        };
-                    };
-                    {t_: $acc.t_, auto_ack_: $acc.auto_ack_};
-                });
-                RETURN SELECT VALUE message_id.* FROM $msgs
+                } ELSE {
+                        RETURN $acc;
+                }
+            }).out_;
+            IF !type::is::array($msgs) OR array::is_empty($msgs) { -- nothing on the queue
+                RETURN []
             };
-            COMMIT TRANSACTION;
-    ";
+            -- next we iterate over the messages, create the in process if needed, delete and get payload
+            LET $payloads = array::fold($msgs, {out_: [], t_: $processing_table, auto_ack_: $auto_ack_}, |$acc, $e|  {
+                -- remove from queue and return payload
+                -- remember we don't delete from index, instead acknowledge/reject/cancel will do it
+                LET $deleted = DELETE ONLY $e.id RETURN BEFORE;
+                IF !$deleted {
+                    -- if it was not deleted we will not abort the transaction, we just won't return the payload
+                    RETURN $acc;
+                };
+                IF !$acc.auto_ack_ {
+                    -- upserting will be more robust and not freeze the queue if there is a duplicate
+                    UPSERT type::table($acc.t_) CONTENT {
+                        // loses the uuid, see https://github.com/surrealdb/surrealdb/issues/6104
+                        //id: type::thing($acc.t_, $e.id[2]), // id[2] is the uuid
+                        // we forcefully add it
+                        id: type::record($acc.t_+':u\''+<string>$e.id[2]+'\''), // id[2] is the uuid
+                        message_id: $e.message_id,
+                        priority: $e.priority,
+                        timestamp: time::now()
+                    };
+                };
+                LET $payload = SELECT * FROM ONLY $e.message_id;
+                {out_: array::append($acc.out_, $payload), t_: $acc.t_, auto_ack_: $acc.auto_ack_};
+            });
+            $payloads.out_
+        };
+        COMMIT TRANSACTION;
+    "#;
     let result = db
         .query(q)
         .bind(("queue_table", queue_table))
