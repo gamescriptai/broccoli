@@ -3,6 +3,7 @@ use std::io::{self, Write};
 use std::str::FromStr;
 use std::time::Instant;
 
+use broccoli_queue::brokers::broker::BrokerMessage;
 use broccoli_queue::queue::{BroccoliQueue, ConsumeOptions};
 use criterion::{criterion_group, criterion_main, Criterion};
 use serde::{Deserialize, Serialize};
@@ -145,19 +146,30 @@ async fn benchmark_raw_surrealdb_throughput(db: &Surreal<Any>, message_count: us
 
     // Generate test messages
     let messages = generate_test_messages(queue_name, message_count).await;
+    // turn them into proper broker messages
+    let messages: Vec<BrokerMessage<BenchmarkMessage>> = messages
+        .into_iter()
+        .map(|m| BrokerMessage::new(m, None))
+        .collect();
 
     let now = Instant::now();
     // Publish messages
     for msg in messages {
         // insert payload
-        let _: Option<BenchmarkMessage> = db.create(&msg.id).content(msg.clone()).await.unwrap();
+        // let result: Result<Option<BrokerMessage<BenchmarkMessage>>, _> =
+        //     db.create(&msg.task_id.into()).content(msg.clone()).await;
+        let _ = db
+            .query("CREATE type::thing($id) CONTENT $content")
+            .await
+            .unwrap();
+        // let _: Option<BrokerMessage<BenchmarkMessage>> = result.unwrap();
 
         // insert queue entry
-        let id = msg.id.key().clone();
+        let id = msg.task_id.clone();
         let now = to_rfc3339(time::OffsetDateTime::now_utc()).unwrap();
         let queue_record_str = format!("{queue_table}:[5,<datetime>'{now}',{id}]");
         let queue_record_id = RecordId::from_str(&queue_record_str).unwrap();
-        let message_record_id: RecordId = msg.id.clone();
+        let message_record_id: RecordId = msg.payload.id.clone();
 
         let _: Option<BenchmarkMessageEntry> = db
             .create(queue_record_id.clone())
