@@ -146,7 +146,7 @@ impl Broker for SurrealDBBroker {
                     let secs = when.unix_timestamp();
                     let when: chrono::DateTime<chrono::Utc> =
                         chrono::DateTime::from_timestamp(secs, 0).unwrap_or_default();
-                    let when: surrealdb::sql::Datetime = when.into();
+                    let when: surrealdb::expr::Datetime = when.into();
                     utils::add_to_queue_scheduled(
                         &db,
                         queue_name,
