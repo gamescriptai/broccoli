@@ -23,7 +23,7 @@ struct TestMessage {
 
 #[tokio::test]
 async fn test_publish_and_consume() {
-    //env_logger::init();
+    // env_logger::init();
     #[cfg(feature = "surrealdb")]
     let sdb = get_surrealdb_client().await;
 

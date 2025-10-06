@@ -26,7 +26,7 @@ struct SurrealDBConnectionConfig {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct InternalSurrealDBBrokerQueueIndex {
     pub queue_id: RecordId, // points to queue:[priority,timestamp,messageid]
-    pub timestamp: chrono::DateTime<chrono::Utc>,
+    pub timestamp: surrealdb::sql::Datetime,
 }
 
 impl Default for SurrealDBBroker {
@@ -235,7 +235,8 @@ fn failed_table(queue_name: &str) -> String {
 fn message_record_id(queue_name: &str, task_id: &str) -> Result<RecordId, BroccoliError> {
     match surrealdb::sql::Uuid::from_str(task_id) {
         Ok(uuid) => {
-            let uuid: surrealdb::expr::Id = uuid.to_raw().into();
+            let uuid: surrealdb::expr::Uuid = uuid.into();
+            let uuid: surrealdb::expr::Id = uuid.into();
             let message_id = surrealdb::expr::Thing::from((queue_name, uuid));
             let record_id = RecordId::from_inner(message_id);
             Ok(record_id)
@@ -258,8 +259,9 @@ fn queue_record_id(
 ) -> RecordId {
     let queue_table = self::queue_table(queue_name);
     let priority: surrealdb::expr::Value = priority.into();
-    let task_id_uuid_sql_val: surrealdb::expr::Value = task_id.to_raw().into();
-    let datetime: surrealdb::expr::Value = when.to_raw().into();
+    let task_id_uuid_sql_val: surrealdb::expr::Value = task_id.into();
+    let datetime: surrealdb::expr::Datetime = when.into();
+    let datetime: surrealdb::expr::Value = datetime.into();
     let vec_id: surrealdb::expr::Id = vec![priority, datetime, task_id_uuid_sql_val].into();
     let queue_thing = surrealdb::expr::Thing::from((queue_table, vec_id));
     let queue_record_id: RecordId = RecordId::from_inner(queue_thing);
@@ -270,9 +272,9 @@ fn queue_record_id(
 /// could simplify to index only by `task_id` but the queue name is useful for observability purposes
 fn index_record_id(task_id: &str, queue_name: &str) -> Result<RecordId, BroccoliError> {
     let index_table = self::index_table(queue_name);
-    let uuid = surrealdb::sql::Uuid::from_str(task_id)
+    let uuid = surrealdb::expr::Uuid::from_str(task_id)
         .map_err(|()| BroccoliError::Broker(format!("{task_id} is not a uuid")))?;
-    let uuid_val: surrealdb::expr::Value = uuid.to_raw().into();
+    let uuid_val: surrealdb::expr::Value = uuid.into();
     let queue_name_val = surrealdb::expr::Value::from(queue_name);
     let vec_id: surrealdb::expr::Id = vec![uuid_val, queue_name_val].into();
     let index_thing = surrealdb::expr::Thing::from((index_table, vec_id));
@@ -352,7 +354,7 @@ async fn add_record_to_queue(
         id: queue_record_id.clone(),
         message_id: message_record_id.clone(),
         priority,
-        timestamp: ts,
+        timestamp: ts.into(),
     };
     let mut retryable = RetriableSurrealDBResult::new(format!("{err_msg}:'{queue_name}': adding to queue"));
     while !retryable.is_done() {
@@ -387,7 +389,7 @@ async fn add_to_queue_index(
     let index_record_id = index_record_id(task_id, queue_name)?;
     let qm: Option<InternalSurrealDBBrokerQueueIndex> = db
         .upsert(index_record_id)
-        .content(InternalSurrealDBBrokerQueueIndex { queue_id, timestamp: ts })
+        .content(InternalSurrealDBBrokerQueueIndex { queue_id, timestamp: ts.into() })
         .await
         .map_err(|e: surrealdb::Error| {
             BroccoliError::Broker(format!("{err_msg}:'{queue_name}': {e}"))
@@ -429,8 +431,10 @@ async fn remove_from_queue_index(
     // we build {index_table}:[<uuid>'{task_id}','{queue_name}']
     let index_table = self::index_table(queue_name);
     let uuid = surrealdb::sql::Uuid::from_str(task_id)
-        .map_err(|()| BroccoliError::Broker(format!("{} is not a uuid", &task_id)))?;
-    let task_id_uuid_sql_val: surrealdb::expr::Value = uuid.to_raw().into();
+    .map_err(|()| BroccoliError::Broker(format!("{} is not a uuid", &task_id)))?;
+    let uuid: surrealdb::expr::Uuid = uuid.into();
+    let uuid: surrealdb::expr::Id = uuid.into();
+    let task_id_uuid_sql_val: surrealdb::expr::Value = uuid.into();
     let queue_name_val: surrealdb::expr::Value = queue_name.into();
     let vec_id: surrealdb::expr::Id = vec![task_id_uuid_sql_val, queue_name_val].into();
     let index_thing = surrealdb::expr::Thing::from((index_table, vec_id));
@@ -499,9 +503,9 @@ pub(crate) async fn get_queued_transaction_impl(
             LET $msgs = [1,2,3,4,5].fold({out_: [], remaining_: $batch_size, t_: $queue_table}, |$acc, $p| { 
                 IF $acc.remaining_>0 {
                     LET $output = SELECT * FROM type::thing($acc.t_,type::range([[$p,None],[$p,time::now()]])) LIMIT $acc.remaining_;
-                    LET $size = IF type::is::none($output) {RETURN 0} ELSE {RETURN array::len($output)};
+                    LET $size = IF type::is::none($output) {0} ELSE {array::len($output)};
                     IF $size>0 {
-                    RETURN {out_: array::concat($acc.out_, $output), remaining_: $acc.remaining_-$size, t_: $acc.t_};
+                        RETURN {out_: array::concat($acc.out_, $output), remaining_: $acc.remaining_-$size, t_: $acc.t_};
                     } ELSE {
                         RETURN $acc;
                     }
@@ -519,7 +523,7 @@ pub(crate) async fn get_queued_transaction_impl(
                 LET $deleted = DELETE ONLY $e.id RETURN BEFORE;
                 IF !$deleted {
                     -- if it was not deleted we will not abort the transaction, we just won't return the payload
-                    RETURN $acc;
+                    RETURN $acc
                 };
                 IF !$acc.auto_ack_ {
                     -- upserting will be more robust and not freeze the queue if there is a duplicate
@@ -727,9 +731,20 @@ pub(crate) async fn remove_from_queue_add_to_processed_transaction(
     }
 }
 
+fn is_transaction_error(e: &surrealdb::Error) -> bool {
+    is_transaction_error_str(&format!("{}", &e))
+    
+}
+
+fn is_transaction_error_str(e: &str) -> bool {
+    e.contains("This transaction can be retried") 
+        || e.contains("The query was not executed due to a failed transaction") 
+        || e.contains("Resource busy")
+}
+
 fn transaction_error(e: &surrealdb::Error, msg: String) -> BroccoliError {
     let e_str = format!("{}", &e);
-    if e_str.contains("This transaction can be retried") {
+    if is_transaction_error(e) {
         BroccoliError::BrokerNonIdempotentRetriableOp(msg)
     } else if e_str.contains("CONCURRENT_READ") {
         BroccoliError::BrokerNonIdempotentOp(msg)
@@ -746,6 +761,7 @@ pub(crate) async fn remove_queued_from_index(
     err_msg: &'static str,
 ) -> Result<Option<InternalSurrealDBBrokerMessageEntry>, BroccoliError> {
     let queue_index = self::get_queue_index(db, queue_name, task_id, err_msg).await?;
+    log::warn!("{:?}", &queue_index);
     match queue_index {
         Some(queue_index) => {
             let removed =
@@ -776,7 +792,7 @@ pub async fn add_message(
         status = match result {
             Ok(added) => Some(Ok(added)), // happy path
             Err(e) => {
-                if e.to_string().contains("This transaction can be retried") {
+                if is_transaction_error(&e) {
                     retries += 1;
                     tokio::time::sleep(tokio::time::Duration::from_millis(retries)).await;
                     None
@@ -903,7 +919,8 @@ pub(crate) async fn remove_from_processing(
             ))),
         }?;
     let uuid: surrealdb::sql::Id = uuid.into();
-    let message_id = surrealdb::expr::Thing::from((processing_table.as_str(), uuid.to_raw().as_str()));
+    let uuid: surrealdb::expr::Id = uuid.into();
+    let message_id = surrealdb::expr::Thing::from((processing_table.as_str(), uuid));
     let record_id = RecordId::from_inner(message_id.clone());
     let processed: Option<InternalSurrealDBBrokerMessageEntry> = db
         .delete(record_id)
@@ -1029,7 +1046,7 @@ pub async fn add_to_failed(
     let failed_record = InternalSurrealDBBrokerFailedMessage {
         id: None, // it will be added by serde
         original_msg: InternalSurrealDBBrokerMessage::from(queue_name, msg)?,
-        timestamp: chrono::Utc::now(),
+        timestamp: chrono::Utc::now().into(),
     };
     let q = "CREATE type::thing($failed_table, $message_id) CONTENT $failed_record";
     let _ = db
@@ -1058,8 +1075,12 @@ impl<T> RetriableSurrealDBResult<T> {
     }
 
     // we either have a result or we have exhausted the number of retries
-    const fn is_done(&self) -> bool {
+    fn is_done(&self) -> bool {
         self.status.is_some() || self.retries >= self.max
+    }
+
+    fn retries(&self) -> u8 {
+        self.retries
     }
 
     // take a surrealdb result and process it, updating internal state
@@ -1069,7 +1090,7 @@ impl<T> RetriableSurrealDBResult<T> {
         match result {
             Ok(r) => 
                 self.status = Some(Ok(r)),
-            Err(e) => if format!("{}", &e).contains("This transaction can be retried") {
+            Err(e) => if is_transaction_error_str(&format!("{}", &e)) {
                     tokio::time::sleep(tokio::time::Duration::from_millis(u64::from(self.retries))).await;
                     self.retries += 1;
                 } else {

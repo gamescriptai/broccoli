@@ -40,14 +40,14 @@ pub(crate) struct InternalSurrealDBBrokerMessageEntry {
     pub(crate) id: RecordId, //queuetable:[priority, timestamp, <uuid>task_id]
     pub(crate) message_id: RecordId, // this is the message id: `queue_name:task_id``
     pub(crate) priority: i64, // message priority copy, to use for sorting in consumption
-    pub(crate) timestamp: chrono::DateTime<chrono::Utc>, // when was this created
+    pub(crate) timestamp: surrealdb::sql::Datetime, // when was this created
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct InternalSurrealDBBrokerFailedMessage {
     pub(crate) id: Option<surrealdb::sql::Uuid>, // original task id that failed
     pub(crate) original_msg: InternalSurrealDBBrokerMessage, // full original message
-    pub(crate) timestamp: chrono::DateTime<chrono::Utc>, // when was this created
+    pub(crate) timestamp: surrealdb::sql::Datetime, // when was this created
 }
 
 /// Implementation of the `Broker` trait for `SurrealDBBroker`.

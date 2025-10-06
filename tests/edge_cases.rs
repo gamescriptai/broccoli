@@ -537,7 +537,6 @@ async fn test_multiple_batch_publish_and_handler() {
         });
         // let's give time to the consumer to get execution time
         tokio::time::sleep(tokio::time::Duration::from_millis(2)).await;
-        log::info!("publishing...");
         let published: Vec<TestMessage> = queue
             .publish_batch(test_topic, None, messages.clone(), None)
             .await
@@ -546,7 +545,6 @@ async fn test_multiple_batch_publish_and_handler() {
             .map(|m| m.payload)
             .collect();
         assert_eq!(2, published.len());
-        log::info!("published");
 
         let expected_count = 3; // 1+2
         let wait = tokio::spawn(async move {
@@ -558,7 +556,6 @@ async fn test_multiple_batch_publish_and_handler() {
                 counter = *_lock;
                 let _lock: Option<()> = None;
                 // CRITICAL AREA END //
-                log::info!("wait loop, counter={}", &counter);
             }
             consumer.abort();
         });
