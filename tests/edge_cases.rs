@@ -189,8 +189,8 @@ async fn test_concurrent_consume() {
     assert_eq!(unique_ids.len(), 5);
 }
 
-#[cfg(feature = "surrealdb")]
 #[tokio::test]
+#[cfg(feature = "surrealdb")]
 async fn test_ttl_not_implemented() {
     let queue = common::setup_queue().await;
     let test_topic = "test_zero_ttl_topic";
@@ -496,77 +496,82 @@ async fn process_job(m: TestMessage) -> Result<(), BroccoliError> {
 }
 
 //#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[cfg(feature = "surrealdb")]
 #[tokio::test]
 async fn test_multiple_batch_publish_and_handler() {
     // similar situation with handlers
-    let test_topic = "test_multiple_batch_publish_and_handler_topic";
-    let queue = common::setup_queue().await;
+    #[cfg(feature = "surrealdb")]
+    {
+        //env_logger::init();
+        let test_topic = "test_multiple_batch_publish_and_handler_topic";
+        let queue = common::setup_queue().await;
 
-    // Test messages
-    let messages = vec![
-        TestMessage {
-            id: "1".to_string(),
-            content: "content 1".to_string(),
-        },
-        TestMessage {
-            id: "2".to_string(),
-            content: "content 2 [last]".to_string(),
-        },
-    ];
+        // Test messages
+        let messages = vec![
+            TestMessage {
+                id: "1".to_string(),
+                content: "content 1".to_string(),
+            },
+            TestMessage {
+                id: "2".to_string(),
+                content: "content 2 [last]".to_string(),
+            },
+        ];
 
-    for _ in 0..5 {
-        // reset counter and launch consumer first
+        for _ in 0..5 {
+            // reset counter and launch consumer first
 
-        // CRITICAL AREA START //
-        {
-            let mut _lock = processed.lock().await;
-            *_lock = 0;
-            let _lock: Option<()> = None;
-        }
-        // CRITICAL AREA END //
-        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-        let queue_clone = queue.clone();
-        let consumer = tokio::spawn(async move {
-            let _ = queue_clone
-                .process_messages(test_topic, None, None, |msg| async {
-                    process_job(msg.payload).await
-                })
-                .await;
-            panic!("Spawn should have been killed while processing");
-        });
-        // let's give time to the consumer to get execution time
-        tokio::time::sleep(tokio::time::Duration::from_millis(2)).await;
-        let published: Vec<TestMessage> = queue
-            .publish_batch(test_topic, None, messages.clone(), None)
-            .await
-            .expect("Failed to publish batch")
-            .into_iter()
-            .map(|m| m.payload)
-            .collect();
-        assert_eq!(2, published.len());
-
-        let expected_count = 3; // 1+2
-        let wait = tokio::spawn(async move {
-            let mut counter = 0;
-            while counter < expected_count {
-                tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-                // CRITICAL AREA START //
-                let _lock = processed.lock().await;
-                counter = *_lock;
+            // CRITICAL AREA START //
+            {
+                let mut _lock = processed.lock().await;
+                *_lock = 0;
                 let _lock: Option<()> = None;
-                // CRITICAL AREA END //
             }
-            consumer.abort();
-        });
-        let _ = tokio::time::timeout(tokio::time::Duration::from_secs(20), wait).await;
-        // CRITICAL AREA START //
-        {
-            let _lock = processed.lock().await;
-            assert_eq!(3, *_lock);
-            let _lock: Option<()> = None;
+            // CRITICAL AREA END //
+            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+            let queue_clone = queue.clone();
+            let consumer = tokio::spawn(async move {
+                let _ = queue_clone
+                    .process_messages(test_topic, None, None, |msg| async {
+                        process_job(msg.payload).await
+                    })
+                    .await;
+                panic!("Spawn should have been killed while processing");
+            });
+            // let's give time to the consumer to get execution time
+            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+            let published: Vec<TestMessage> = queue
+                .publish_batch(test_topic, None, messages.clone(), None)
+                .await
+                .expect("Failed to publish batch")
+                .into_iter()
+                .map(|m| m.payload)
+                .collect();
+            assert_eq!(2, published.len());
+            log::warn!("*** PUBLISHED");
+
+            let expected_count = 3; // 1+2
+            let wait = tokio::spawn(async move {
+                let mut counter = 0;
+                while counter < expected_count {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+                    // CRITICAL AREA START //
+                    let _lock = processed.lock().await;
+                    counter = *_lock;
+                    let _lock: Option<()> = None;
+                    // CRITICAL AREA END //
+                    log::warn!("counter={counter}");
+                }
+                consumer.abort();
+            });
+            let _ = tokio::time::timeout(tokio::time::Duration::from_secs(20), wait).await;
+            // CRITICAL AREA START //
+            {
+                let _lock = processed.lock().await;
+                assert_eq!(3, *_lock);
+                let _lock: Option<()> = None;
+            }
+            // CRITICAL AREA END //
         }
-        // CRITICAL AREA END //
     }
 }
 
