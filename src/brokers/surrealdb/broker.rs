@@ -6,7 +6,8 @@ use crate::{
     queue::{ConsumeOptions, PublishOptions},
 };
 
-use surrealdb::{engine::any::Any, RecordId, Value};
+use surrealdb::types::{SurrealValue, Value};
+use surrealdb::{engine::any::Any, types::RecordId};
 use surrealdb::{Notification, Surreal};
 use time::Duration;
 
@@ -19,12 +20,12 @@ pub struct SurrealDBBroker {
     pub(crate) config: Option<BrokerConfig>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, SurrealValue)]
 pub(crate) struct InternalSurrealDBBrokerMessage {
     /// Actual record id in surrealDB (`topicname,<uuid>task_id`)
     pub id: RecordId,
     /// Unique identifier for the message (external version, without table name)
-    pub task_id: surrealdb::sql::Uuid,
+    pub task_id: surrealdb::types::Uuid,
     /// The actual message content stringified
     pub payload: String,
     /// Number of processing attempts made
@@ -35,19 +36,19 @@ pub(crate) struct InternalSurrealDBBrokerMessage {
         Option<std::collections::HashMap<String, crate::brokers::broker::MetadataTypes>>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, SurrealValue)]
 pub(crate) struct InternalSurrealDBBrokerMessageEntry {
     pub(crate) id: RecordId, //queuetable:[priority, timestamp, <uuid>task_id]
     pub(crate) message_id: RecordId, // this is the message id: `queue_name:task_id``
     pub(crate) priority: i64, // message priority copy, to use for sorting in consumption
-    pub(crate) timestamp: surrealdb::sql::Datetime, // when was this created
+    pub(crate) timestamp: surrealdb::types::Datetime, // when was this created
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, SurrealValue)]
 pub(crate) struct InternalSurrealDBBrokerFailedMessage {
-    pub(crate) id: Option<surrealdb::sql::Uuid>, // original task id that failed
+    pub(crate) id: Option<surrealdb::types::Uuid>, // original task id that failed
     pub(crate) original_msg: InternalSurrealDBBrokerMessage, // full original message
-    pub(crate) timestamp: surrealdb::sql::Datetime, // when was this created
+    pub(crate) timestamp: surrealdb::types::Datetime, // when was this created
 }
 
 /// Implementation of the `Broker` trait for `SurrealDBBroker`.
@@ -146,7 +147,7 @@ impl Broker for SurrealDBBroker {
                     let secs = when.unix_timestamp();
                     let when: chrono::DateTime<chrono::Utc> =
                         chrono::DateTime::from_timestamp(secs, 0).unwrap_or_default();
-                    let when: surrealdb::expr::Datetime = when.into();
+                    let when: surrealdb::types::Datetime = when.into();
                     utils::add_to_queue_scheduled(
                         &db,
                         queue_name,
@@ -256,12 +257,16 @@ impl Broker for SurrealDBBroker {
         let db = self.check_connected()?;
         let queue_table = utils::queue_table(queue_name);
         let auto_ack = options.is_some_and(|x| x.auto_ack.unwrap_or(false));
+        // create two vec values put them as an inclusive range, turn the range into a sdb range, create a
+        // record i key, equivalent to: [1,None]..=[5,time::now()]
+        let range = surrealdb::types::RecordIdKeyRange::from_value_range(
+            (Value::from_vec(vec![Value::from_u8(1), Value::default()]) // note default is 'None'
+                ..=Value::from_vec(vec![Value::from_u8(5), Value::String("time::now()".to_owned())])).into(),
+        )
+        .map_err(|e| BroccoliError::Broker(format!("Could not consume:'{queue_name}' {e}")))?;
         let mut stream = db
             .select(queue_table)
-            .range(
-                vec![Value::from_str("1").unwrap_or_default(), Value::default()] // note default is 'None'
-                ..=vec![Value::from_str("5").unwrap_or_default(), Value::from_str("time::now()").unwrap_or_default()],
-            ) // should notify when future becomes present
+            .range(range) // should notify when future becomes present
             .live()
             .await
             .map_err(|err| BroccoliError::Broker(format!("Could not consume: {err:?}")))?;
@@ -277,7 +282,7 @@ impl Broker for SurrealDBBroker {
                         notification;
                     let payload = notification.data;
                     match notification.action {
-                        surrealdb::Action::Create => Some(Ok(payload)),
+                        surrealdb::types::Action::Create => Some(Ok(payload)),
                         _ => None,
                     }
                 }

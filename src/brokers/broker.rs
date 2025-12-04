@@ -191,7 +191,11 @@ impl<T: Clone + serde::Serialize> BrokerMessage<T> {
     }
 }
 
+#[cfg(feature = "surrealdb")]
+use surrealdb::types::SurrealValue;
+
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "surrealdb", derive(SurrealValue))]
 pub(crate) enum MetadataTypes {
     String(String),
     U64(u64),

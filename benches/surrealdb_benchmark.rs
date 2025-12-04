@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use surrealdb::engine::any::connect;
 use surrealdb::{engine::any::Any, RecordId};
 use surrealdb::{Response, Surreal};
+use surrealdb_types::SurrealValue;
 use tokio::runtime::Runtime;
 use tokio_util::sync::CancellationToken;
 
@@ -25,7 +26,7 @@ struct BenchmarkMessageEntry {
     priority: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
 struct BenchmarkMessageIndex {
     queue_id: RecordId, // queue:[timestamp,id]
 }
