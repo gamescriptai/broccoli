@@ -935,6 +935,7 @@ async fn test_process_messages() {
 
 #[tokio::test]
 async fn test_process_messages_with_handlers() {
+    // env_logger::init();
     let producer_queue = common::setup_queue().await;
     let consumer_queue = producer_queue.clone();
 
@@ -974,7 +975,8 @@ async fn test_process_messages_with_handlers() {
     let wait = tokio::spawn(async move {
         let mut counter = 0;
         while counter < expected_count {
-            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+            log::warn!("counter={counter}");
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
             let lock = succeeded.lock().await;
             counter = *lock;
         }
