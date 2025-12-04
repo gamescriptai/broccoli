@@ -372,7 +372,6 @@ async fn add_record_to_queue(
             .create(&queue_record_id)
             .content(msg.clone())
             .await;
-        eprintln!("result={:#?}", result);
         retryable = retryable.step(result).await;
     }
     let qm = retryable.wrapup()?;
@@ -532,7 +531,7 @@ pub(crate) async fn get_queued_transaction_impl(
                 };
                 IF !$acc.auto_ack_ {
                     -- upserting will be more robust and not freeze the queue if there is a duplicate
-                    UPSERT type::record($acc.t_, $e.id[2])ß CONTENT { // id[2] is the uuid
+                    UPSERT type::record($acc.t_, $e.id[2]) CONTENT { // id[2] is the uuid
                         message_id: $e.message_id,
                         priority: $e.priority,
                         timestamp: time::now()
@@ -552,14 +551,13 @@ pub(crate) async fn get_queued_transaction_impl(
         .bind(("auto_ack", auto_ack))
         .bind(("batch_size", batch_size))
         .await;
-eprintln!("result={:#?}", result);
-panic!("AAA");
-match result {
-    Ok(mut resp) => {
+
+    match result {
+        Ok(mut resp) => {
             let returned: Result<
                 Vec<InternalSurrealDBBrokerMessage>,
                 surrealdb::Error,
-            > = resp.take(resp.num_statements() - 1);
+            > = resp.take(resp.num_statements() - 2); // changed behaviour in 3.x
             let transaction = resp.check(); //take(0 as usize);
             match transaction {
                 Ok(_) => {
@@ -956,7 +954,7 @@ pub(crate) async fn remove_message_and_from_processing_transaction(
         {
             -- see https://github.com/surrealdb/surrealdb/issues/6104 for context on the weird conversions
             -- delete payload
-            LET $message_id = type::record($queue_name,$task_id);
+            LET $message_id = type::record($queue_name, $task_id);
             LET $m = DELETE $message_id RETURN BEFORE;
             IF !$m {
                 THROW 'Transaction failed removing payload '+<string>$message_id+ ' (CONCURRENT_READ)';
@@ -988,7 +986,7 @@ pub(crate) async fn remove_message_and_from_processing_transaction(
         .await;
     match result {
         Ok(mut resp) => {
-            let returned: Result< Option<InternalSurrealDBBrokerMessageEntry>, surrealdb::Error> = resp.take(resp.num_statements()-1);
+            let returned: Result< Option<InternalSurrealDBBrokerMessageEntry>, surrealdb::Error> = resp.take(resp.num_statements()-2);
             let transaction = resp.check();
             match transaction {
                 Ok(_) => match returned {
