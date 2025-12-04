@@ -1054,7 +1054,7 @@ pub async fn add_to_failed(
         original_msg: InternalSurrealDBBrokerMessage::from(queue_name, msg)?,
         timestamp: chrono::Utc::now().into(),
     };
-    let q = "CREATE type::thing($failed_table, $message_id) CONTENT $failed_record";
+    let q = "CREATE type::record($failed_table, $message_id) CONTENT $failed_record";
     let _ = db
         .query(q)
         .bind(("failed_table", failed_table))

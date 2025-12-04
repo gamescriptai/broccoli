@@ -544,7 +544,7 @@ async fn test_message_acknowledgment() {
         // we verify processing and index tables are empty
         let db = common::get_surrealdb_client().await;
         let mut res = db
-            .query("(SELECT VALUE COUNT() FROM test_ack_topic___processing GROUP ALL).count")
+            .query("(SELECT VALUE COUNT() FROM test_ack_topic___processing GROUP ALL)[0]")
             .await
             .unwrap();
         let c: Option<i64> = res.take(0).unwrap();
@@ -552,7 +552,7 @@ async fn test_message_acknowledgment() {
         assert_eq!(0, c);
         let db = common::get_surrealdb_client().await;
         let mut res = db
-            .query("(SELECT VALUE COUNT() FROM test_ack_topic___index GROUP ALL).count")
+            .query("(SELECT VALUE COUNT() FROM test_ack_topic___index GROUP ALL)[0]")
             .await
             .unwrap();
         let c: Option<i64> = res.take(0).unwrap();
