@@ -20,6 +20,12 @@ pub struct SurrealDBBroker {
     pub(crate) config: Option<BrokerConfig>,
 }
 
+/// overriden payload traits
+pub trait RequiredPayloadBounds: SurrealValue {}
+
+/// overriden payload traits
+impl<T: SurrealValue> RequiredPayloadBounds for T {}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, SurrealValue)]
 pub(crate) struct InternalSurrealDBBrokerMessage {
     /// Actual record id in surrealDB (`topicname,<uuid>task_id`)

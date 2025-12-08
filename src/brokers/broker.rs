@@ -1,5 +1,10 @@
 use std::collections::HashMap;
 
+#[cfg(feature = "surrealdb")]
+use crate::brokers::surrealdb::broker::RequiredPayloadBounds;
+#[cfg(feature = "surrealdb")]
+use surrealdb::types::SurrealValue;
+
 use crate::{
     error::BroccoliError,
     queue::{ConsumeOptions, PublishOptions},
@@ -159,12 +164,26 @@ impl Default for BrokerConfig {
     }
 }
 
+// empty trait if no trait bounds are required
+// override if any are needed
+#[cfg(not(feature = "surrealdb"))]
+/// no bounds required for payload generic type
+pub trait RequiredPayloadBounds {}
+
+#[cfg(not(feature = "surrealdb"))]
+/// no bounds required for payload generic type
+impl<T> RequiredPayloadBounds for T {}
+
 /// A wrapper for messages that includes metadata for processing.
 ///
 /// # Type Parameters
 /// * `T` - The type of the payload, must implement Clone and Serialize
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct BrokerMessage<T: Clone> {
+#[cfg_attr(feature = "surrealdb", derive(SurrealValue))]
+pub struct BrokerMessage<T: Clone>
+where
+    T: RequiredPayloadBounds,
+{
     /// Unique identifier for the message
     pub task_id: uuid::Uuid,
     /// The actual message content
@@ -178,7 +197,7 @@ pub struct BrokerMessage<T: Clone> {
     pub(crate) metadata: Option<HashMap<String, MetadataTypes>>,
 }
 
-impl<T: Clone + serde::Serialize> BrokerMessage<T> {
+impl<T: Clone + serde::Serialize + RequiredPayloadBounds> BrokerMessage<T> {
     /// Creates a new `BrokerMessage` with the provided payload.
     pub fn new(payload: T, disambiguator: Option<String>) -> Self {
         Self {
@@ -190,9 +209,6 @@ impl<T: Clone + serde::Serialize> BrokerMessage<T> {
         }
     }
 }
-
-#[cfg(feature = "surrealdb")]
-use surrealdb::types::SurrealValue;
 
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "surrealdb", derive(SurrealValue))]
@@ -236,7 +252,9 @@ impl InternalBrokerMessage {
     }
 }
 
-impl<T: Clone + serde::Serialize> From<BrokerMessage<T>> for InternalBrokerMessage {
+impl<T: Clone + serde::Serialize + RequiredPayloadBounds> From<BrokerMessage<T>>
+    for InternalBrokerMessage
+{
     fn from(msg: BrokerMessage<T>) -> Self {
         Self {
             task_id: msg.task_id.to_string(),
@@ -248,7 +266,9 @@ impl<T: Clone + serde::Serialize> From<BrokerMessage<T>> for InternalBrokerMessa
     }
 }
 
-impl<T: Clone + serde::Serialize> From<&BrokerMessage<T>> for InternalBrokerMessage {
+impl<T: Clone + serde::Serialize + RequiredPayloadBounds> From<&BrokerMessage<T>>
+    for InternalBrokerMessage
+{
     fn from(msg: &BrokerMessage<T>) -> Self {
         Self {
             task_id: msg.task_id.to_string(),
@@ -268,7 +288,9 @@ impl InternalBrokerMessage {
     ///
     /// # Errors
     /// If the payload cannot be deserialized.
-    pub fn into_message<T: Clone + serde::de::DeserializeOwned + serde::Serialize>(
+    pub fn into_message<
+        T: Clone + serde::de::DeserializeOwned + serde::Serialize + RequiredPayloadBounds,
+    >(
         &self,
     ) -> Result<BrokerMessage<T>, BroccoliError> {
         Ok(BrokerMessage {

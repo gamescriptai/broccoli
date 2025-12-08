@@ -6,12 +6,15 @@ use broccoli_queue::queue::PublishOptions;
 #[cfg(feature = "redis")]
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "surrealdb")]
+use surrealdb::types::SurrealValue;
 use time::Duration;
 use tokio::sync::Mutex;
 
 mod common;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "surrealdb", derive(SurrealValue))]
 struct TestMessage {
     id: String,
     content: String,

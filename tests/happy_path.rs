@@ -7,6 +7,8 @@ use broccoli_queue::{
 #[cfg(feature = "redis")]
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "surrealdb")]
+use surrealdb::types::SurrealValue;
 use time::Duration;
 use tokio::sync::Mutex;
 
@@ -16,6 +18,7 @@ use crate::common::get_surrealdb_client;
 mod common;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "surrealdb", derive(SurrealValue))]
 struct TestMessage {
     id: String,
     content: String,

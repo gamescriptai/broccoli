@@ -16,6 +16,11 @@ use crate::{
     error::BroccoliError,
 };
 
+#[cfg(feature = "surrealdb")]
+use crate::brokers::surrealdb::broker::RequiredPayloadBounds;
+#[cfg(not(feature = "surrealdb"))]
+use crate::brokers::RequiredPayloadBounds;
+
 /// Configuration for message retry behavior.
 ///
 /// This struct defines how failed messages should be handled,
@@ -462,7 +467,9 @@ impl BroccoliQueue {
     ///
     /// # Errors
     /// If the message fails to publish, a `BroccoliError` will be returned.
-    pub async fn publish<T: Clone + serde::Serialize + serde::de::DeserializeOwned>(
+    pub async fn publish<
+        T: Clone + serde::Serialize + serde::de::DeserializeOwned + RequiredPayloadBounds,
+    >(
         &self,
         topic: &str,
         disambiguator: Option<String>,
@@ -493,7 +500,9 @@ impl BroccoliQueue {
     ///
     /// # Errors
     /// If the messages fail to publish, a `BroccoliError` will be returned.
-    pub async fn publish_batch<T: Clone + serde::Serialize + serde::de::DeserializeOwned>(
+    pub async fn publish_batch<
+        T: Clone + serde::Serialize + serde::de::DeserializeOwned + RequiredPayloadBounds,
+    >(
         &self,
         topic: &str,
         disambiguator: Option<String>,
@@ -534,7 +543,9 @@ impl BroccoliQueue {
     ///
     /// # Errors
     /// If the message fails to consume, a `BroccoliError` will be returned.
-    pub async fn consume<T: Clone + serde::Serialize + serde::de::DeserializeOwned>(
+    pub async fn consume<
+        T: Clone + serde::Serialize + serde::de::DeserializeOwned + RequiredPayloadBounds,
+    >(
         &self,
         topic: &str,
         options: Option<ConsumeOptions>,
@@ -562,7 +573,9 @@ impl BroccoliQueue {
     ///
     /// # Errors
     /// If the messages fail to consume, a `BroccoliError` will be returned.
-    pub async fn consume_batch<T: Clone + serde::Serialize + serde::de::DeserializeOwned>(
+    pub async fn consume_batch<
+        T: Clone + serde::Serialize + serde::de::DeserializeOwned + RequiredPayloadBounds,
+    >(
         &self,
         topic: &str,
         batch_size: usize,
@@ -593,7 +606,9 @@ impl BroccoliQueue {
     ///
     /// # Errors
     /// If the message fails to consume, a `BroccoliError` will be returned.
-    pub async fn try_consume<T: Clone + serde::Serialize + serde::de::DeserializeOwned>(
+    pub async fn try_consume<
+        T: Clone + serde::Serialize + serde::de::DeserializeOwned + RequiredPayloadBounds,
+    >(
         &self,
         topic: &str,
         options: Option<ConsumeOptions>,
@@ -621,7 +636,9 @@ impl BroccoliQueue {
     /// # Returns
     /// A `Result` containing a `Vec(String)` with the available message(s)
     /// and a `BroccoliError` on failure.
-    pub async fn try_consume_batch<T: Clone + serde::Serialize + serde::de::DeserializeOwned>(
+    pub async fn try_consume_batch<
+        T: Clone + serde::Serialize + serde::de::DeserializeOwned + RequiredPayloadBounds,
+    >(
         &self,
         topic: &str,
         batch_size: usize,
@@ -651,7 +668,9 @@ impl BroccoliQueue {
     ///
     /// # Errors
     /// If the message fails to acknowledge, a `BroccoliError` will be returned.
-    pub async fn acknowledge<T: Clone + serde::Serialize + serde::de::DeserializeOwned>(
+    pub async fn acknowledge<
+        T: Clone + serde::Serialize + serde::de::DeserializeOwned + RequiredPayloadBounds,
+    >(
         &self,
         topic: &str,
         message: BrokerMessage<T>,
@@ -677,7 +696,9 @@ impl BroccoliQueue {
     ///
     /// # Errors
     /// If the message fails to reject, a `BroccoliError` will be returned.
-    pub async fn reject<T: Clone + serde::Serialize + serde::de::DeserializeOwned>(
+    pub async fn reject<
+        T: Clone + serde::Serialize + serde::de::DeserializeOwned + RequiredPayloadBounds,
+    >(
         &self,
         topic: &str,
         message: BrokerMessage<T>,
@@ -760,7 +781,12 @@ impl BroccoliQueue {
         handler: F,
     ) -> Result<(), BroccoliError>
     where
-        T: serde::de::DeserializeOwned + Send + Clone + serde::Serialize + 'static,
+        T: serde::de::DeserializeOwned
+            + Send
+            + Clone
+            + serde::Serialize
+            + RequiredPayloadBounds
+            + 'static,
         F: Fn(BrokerMessage<T>) -> Fut + Send + Sync + Clone + 'static,
         Fut: Future<Output = Result<(), BroccoliError>> + Send + 'static,
     {
@@ -938,7 +964,12 @@ impl BroccoliQueue {
         on_error: E,
     ) -> Result<(), BroccoliError>
     where
-        T: serde::de::DeserializeOwned + Send + Clone + serde::Serialize + 'static,
+        T: serde::de::DeserializeOwned
+            + Send
+            + Clone
+            + serde::Serialize
+            + RequiredPayloadBounds
+            + 'static,
         F: Fn(BrokerMessage<T>) -> MessageFut + Send + Sync + Clone + 'static,
         MessageFut: Future<Output = Result<R, BroccoliError>> + Send + 'static,
         R: Send + Clone + 'static,
