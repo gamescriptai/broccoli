@@ -4,6 +4,7 @@ use surrealdb::engine::any::connect;
 use surrealdb::engine::any::Any;
 use surrealdb::types::{SurrealValue, RecordId};
 use surrealdb::Surreal;
+use surrealdb_types::ToSql;
 use time::Duration;
 use url::Url;
 
@@ -174,7 +175,7 @@ pub(crate) fn get_param_value(url: &Url, name: &str) -> Result<String, BroccoliE
 impl From<InternalSurrealDBBrokerMessage> for InternalBrokerMessage {
     fn from(val: InternalSurrealDBBrokerMessage) -> Self {
         Self {
-            task_id: val.task_id.to_raw(), // converts without prefixes or quotations
+            task_id: val.task_id.to_string(), // converts without prefixes or quotations
             payload: val.payload,
             attempts: val.attempts,
             disambiguator: None,
