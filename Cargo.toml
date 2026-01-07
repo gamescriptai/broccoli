@@ -29,9 +29,9 @@ redis = { version = "0.27.5", features = [
     "aio",
 ], optional = true }
 dashmap = "6.1.0"
-surrealdb = { git = "https://github.com/surrealdb/surrealdb", tag = "v3.0.0-beta.1", optional = true }
-surrealdb-types = { git = "https://github.com/surrealdb/surrealdb", tag = "v3.0.0-beta.1", optional = true }
-surrealdb-types-derive = { git = "https://github.com/surrealdb/surrealdb", tag = "v3.0.0-beta.1", optional = true }
+surrealdb = { git = "https://github.com/surrealdb/surrealdb", tag = "v3.0.0-beta.1", optional = true, features = ["kv-mem"]  }
+surrealdb-types = { git = "https://github.com/surrealdb/surrealdb", optional = true, tag = "v3.0.0-beta.1" }
+surrealdb-types-derive = { git = "https://github.com/surrealdb/surrealdb", optional = true, tag = "v3.0.0-beta.1" }
 
 chrono = { version = "0.4.41", features = ["serde"]}
 url = { version = "2.5.4", optional = true } 
@@ -47,9 +47,7 @@ tokio-util = "0.7.15"
 default = []
 redis = ["dep:bb8-redis", "dep:redis"]
 rabbitmq = ["dep:lapin", "dep:deadpool", "dep:deadpool-lapin"]
-surrealdb = ["dep:surrealdb", "dep:url"]
-#surrealdb = ["dep:surreal", "dep:url"]
-#surrealdb = ["dep:surrealdb-alpha", "dep:url"]
+surrealdb = ["dep:surrealdb", "dep:surrealdb-types", "dep:surrealdb-types-derive", "dep:url"]
 test-fairness = []
 
 # Allows for access to the management API for the queue.

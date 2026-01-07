@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use surrealdb::engine::any::connect;
 use surrealdb::engine::any::Any;
-use surrealdb::types::{SurrealValue, RecordId};
+use surrealdb_types::{SurrealValue, RecordId};
 use surrealdb::Surreal;
 use time::Duration;
 use url::Url;

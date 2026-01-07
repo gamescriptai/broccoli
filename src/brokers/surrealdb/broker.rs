@@ -4,9 +4,9 @@ use crate::{
     queue::{ConsumeOptions, PublishOptions},
 };
 
-use surrealdb::types::{SurrealValue, Value};
-use surrealdb::{engine::any::Any, types::RecordId};
+use surrealdb::engine::any::Any;
 use surrealdb::{Notification, Surreal};
+use surrealdb_types::{RecordId, SurrealValue, Value};
 use time::Duration;
 
 use super::utils;
@@ -18,7 +18,9 @@ pub struct SurrealDBBroker {
     pub(crate) config: Option<BrokerConfig>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, SurrealValue)]
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, surrealdb_types_derive::SurrealValue,
+)]
 pub(crate) struct InternalSurrealDBBrokerMessage {
     /// Actual record id in surrealDB (`topicname,<uuid>task_id`)
     pub id: RecordId,
@@ -34,7 +36,9 @@ pub(crate) struct InternalSurrealDBBrokerMessage {
         Option<std::collections::HashMap<String, crate::brokers::broker::MetadataTypes>>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, SurrealValue)]
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, surrealdb_types_derive::SurrealValue,
+)]
 pub(crate) struct InternalSurrealDBBrokerMessageEntry {
     pub(crate) id: RecordId, //queuetable:[priority, timestamp, <uuid>task_id]
     pub(crate) message_id: RecordId, // this is the message id: `queue_name:task_id``
@@ -42,11 +46,13 @@ pub(crate) struct InternalSurrealDBBrokerMessageEntry {
     pub(crate) timestamp: surrealdb::types::Datetime, // when was this created
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, SurrealValue)]
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, surrealdb_types_derive::SurrealValue,
+)]
 pub(crate) struct InternalSurrealDBBrokerFailedMessage {
-    pub(crate) id: Option<surrealdb::types::Uuid>, // original task id that failed
+    pub(crate) id: Option<surrealdb_types::Uuid>, // original task id that failed
     pub(crate) original_msg: InternalSurrealDBBrokerMessage, // full original message
-    pub(crate) timestamp: surrealdb::types::Datetime, // when was this created
+    pub(crate) timestamp: surrealdb_types::Datetime, // when was this created
 }
 
 /// Implementation of the `Broker` trait for `SurrealDBBroker`.
