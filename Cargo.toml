@@ -29,13 +29,10 @@ redis = { version = "0.27.5", features = [
     "aio",
 ], optional = true }
 dashmap = "6.1.0"
-#surrealdb = { version = "3.0.0-alpha.16", optional = true, features = ["kv-mem"] }
-surrealdb = { path = "../../surrealdb/surrealdb/crates/sdk", optional = true, features = ["kv-mem"]  }
-surrealdb-types = { path = "../../surrealdb/surrealdb/crates/types" }
-surrealdb-types-derive = { path = "../../surrealdb/surrealdb/crates/types-derive" }
-#surrealdb-types = { version = "3.0.0-alpha.14" }
+surrealdb = { git = "https://github.com/surrealdb/surrealdb", tag = "v3.0.0-beta.1", optional = true }
+surrealdb-types = { git = "https://github.com/surrealdb/surrealdb", tag = "v3.0.0-beta.1", optional = true }
+surrealdb-types-derive = { git = "https://github.com/surrealdb/surrealdb", tag = "v3.0.0-beta.1", optional = true }
 
-#surrealdb-alpha = { version = "3.0.14", optional = true, features = ["kv-mem"]}
 chrono = { version = "0.4.41", features = ["serde"]}
 url = { version = "2.5.4", optional = true } 
 derive_more = { version = "2.0.1", features = ["display"], optional = true }

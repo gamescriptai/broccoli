@@ -1,5 +1,3 @@
-use std::str::FromStr;
-
 use crate::{
     brokers::broker::{Broker, BrokerConfig, InternalBrokerMessage},
     error::BroccoliError,
