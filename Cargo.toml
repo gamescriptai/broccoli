@@ -29,10 +29,11 @@ redis = { version = "0.27.5", features = [
     "aio",
 ], optional = true }
 dashmap = "6.1.0"
-# Use version-based dependency - workspace patches will apply
-surrealdb = { version = "2.3.9", optional = true, features = ["kv-mem"] }
+# The queue accepts an existing Surreal<Any>; the application owns the engine.
+# Keep kv-mem test-only so every runtime consumer does not compile it.
+surrealdb = { version = "2.3.9", optional = true, default-features = false }
 chrono = { version = "0.4.41", features = ["serde"]}
-url = { version = "2.5.4", optional = true } 
+url = { version = "2.5.4", optional = true }
 derive_more = { version = "2.0.1", features = ["display"], optional = true }
 
 [dev-dependencies]
@@ -40,6 +41,7 @@ lazy_static = "1.5.0"
 env_logger = "0.11.5"
 criterion = { version = "0.5", features = ["async_tokio"] }
 tokio-util = "0.7.15"
+surrealdb = { version = "2.3.9", default-features = false, features = ["kv-mem"] }
 
 [features]
 default = []
