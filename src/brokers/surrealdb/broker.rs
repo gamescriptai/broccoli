@@ -256,14 +256,18 @@ impl Broker for SurrealDBBroker {
         let db = self.check_connected()?;
         let queue_table = utils::queue_table(queue_name);
         let auto_ack = options.is_some_and(|x| x.auto_ack.unwrap_or(false));
+        // The key range is [priority, scheduled]; `time::now()` is re-evaluated per change, so a
+        // message notifies once its scheduled time has passed. Record-id ranges cannot carry an
+        // expression bound as a value, so the range is written as a WHERE clause.
+        let live_query = format!(
+            "LIVE SELECT * FROM `{queue_table}` WHERE id >= type::record($tb, [1, NONE]) \
+             AND id <= type::record($tb, [5, time::now()])"
+        );
         let mut stream = db
-            .select(queue_table)
-            .range(
-                vec![Value::from_str("1").unwrap_or_default(), Value::default()] // note default is 'None'
-                ..=vec![Value::from_str("5").unwrap_or_default(), Value::from_str("time::now()").unwrap_or_default()],
-            ) // should notify when future becomes present
-            .live()
+            .query(live_query)
+            .bind(("tb", queue_table.clone()))
             .await
+            .and_then(|mut response| response.stream::<InternalSurrealDBBrokerMessageEntry>(0))
             .map_err(|err| BroccoliError::Broker(format!("Could not consume: {err:?}")))?;
         let mut returned_message: Result<InternalBrokerMessage, BroccoliError> =
             Err(BroccoliError::NotImplemented);

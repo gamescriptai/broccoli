@@ -498,8 +498,8 @@ pub(crate) async fn get_queued_transaction_impl(
             -- this implementation is only for surrealdb 2.1.0+
             LET $msgs = [1,2,3,4,5].fold({out_: [], remaining_: $batch_size, t_: $queue_table}, |$acc, $p| { 
                 IF $acc.remaining_>0 {
-                    LET $output = SELECT * FROM type::thing($acc.t_,type::range([[$p,None],[$p,time::now()]])) LIMIT $acc.remaining_;
-                    LET $size = IF type::is::none($output) {RETURN 0} ELSE {RETURN array::len($output)};
+                    LET $output = SELECT * FROM type::record($acc.t_,type::range([[$p,None],[$p,time::now()]])) LIMIT $acc.remaining_;
+                    LET $size = IF type::is_none($output) {RETURN 0} ELSE {RETURN array::len($output)};
                     IF $size>0 {
                     RETURN {out_: array::concat($acc.out_, $output), remaining_: $acc.remaining_-$size, t_: $acc.t_};
                     } ELSE {
@@ -509,7 +509,7 @@ pub(crate) async fn get_queued_transaction_impl(
                         RETURN $acc;
                 }
             }).out_;
-            IF !type::is::array($msgs) OR array::is_empty($msgs) { -- nothing on the queue
+            IF !type::is_array($msgs) OR array::is_empty($msgs) { -- nothing on the queue
                 RETURN []
             };
             -- next we iterate over the messages, create the in process if needed, delete and get payload
@@ -525,7 +525,7 @@ pub(crate) async fn get_queued_transaction_impl(
                     -- upserting will be more robust and not freeze the queue if there is a duplicate
                     UPSERT type::table($acc.t_) CONTENT {
                         // loses the uuid, see https://github.com/surrealdb/surrealdb/issues/6104
-                        //id: type::thing($acc.t_, $e.id[2]), // id[2] is the uuid
+                        //id: type::record($acc.t_, $e.id[2]), // id[2] is the uuid
                         // we forcefully add it
                         id: type::record($acc.t_+':u\''+<string>$e.id[2]+'\''), // id[2] is the uuid
                         message_id: $e.message_id,
@@ -620,7 +620,7 @@ async fn remove_from_queue_add_to_processed_transaction_impl(
             BEGIN TRANSACTION;
             {
                 // loses the uuid, see https://github.com/surrealdb/surrealdb/issues/6104
-                // type::thing($processing_table, record::id($message_id)),
+                // type::record($processing_table, record::id($message_id)),
                 // we forcefully set it
                 LET $processing_id = type::record($processing_table+':u\\''+<string>record::id($message_id)+'\\'');
                 -- upserting will be more robust and not freeze the queue if there is a duplicate
@@ -940,7 +940,7 @@ pub(crate) async fn remove_message_and_from_processing_transaction(
             };
 
             -- remove from index
-            LET $index_id = type::thing($index_table, [<uuid>$task_id, $queue_name]);
+            LET $index_id = type::record($index_table, [<uuid>$task_id, $queue_name]);
             LET $idx = DELETE $index_id RETURN BEFORE;
             IF !$idx {
                 THROW 'Transaction failed removing index '+<string>$index_id+' (CONCURRENT_READ)';
@@ -1031,7 +1031,7 @@ pub async fn add_to_failed(
         original_msg: InternalSurrealDBBrokerMessage::from(queue_name, msg)?,
         timestamp: chrono::Utc::now(),
     };
-    let q = "CREATE type::thing($failed_table, $message_id) CONTENT $failed_record";
+    let q = "CREATE type::record($failed_table, $message_id) CONTENT $failed_record";
     let _ = db
         .query(q)
         .bind(("failed_table", failed_table))
